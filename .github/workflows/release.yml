@@ -1,0 +1,146 @@
+name: Release
+
+# Pushing a tag such as v0.1.0 builds, packages and publishes a GitHub release.
+# Running it by hand is a dry run: it builds and packages, and keeps the files
+# as a workflow artifact, but publishes nothing.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - id: version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "ruckus") | .version')
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match version $version in Cargo.toml"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-26-intel
+          # 22.04 rather than 24.04 for an older glibc, so the binary also runs
+          # on 22.04 (ROS 2 Humble) and similar.
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm
+    runs-on: ${{ matrix.os }}
+    env:
+      # The oldest macOS RoboStack supports; also applies to the C code in aws-lc.
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: Package
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -eux
+          bin=target/$TARGET/release/ruckus
+          # Every target builds on its own kind of machine, so the binary runs here.
+          test "$("$bin" --version)" = "ruckus $VERSION"
+          name=ruckus-$VERSION-$TARGET
+          mkdir -p "dist/$name/completions"
+          cp "$bin" LICENSE README.md "dist/$name/"
+          "$bin" completions bash > "dist/$name/completions/ruckus.bash"
+          "$bin" completions zsh > "dist/$name/completions/_ruckus"
+          "$bin" completions fish > "dist/$name/completions/ruckus.fish"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          tar -tzf "dist/$name.tar.gz"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: ${{ github.event_name == 'push' && 'Publish' || 'Package (dry run)' }}
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum ruckus-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+      - name: Render the Homebrew formula
+        run: |
+          set -eu
+          # Drop the template's header comment.
+          sed '/^class /,$!d' packaging/homebrew/ruckus.rb > dist/ruckus.rb
+          for target in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            sum=$(awk -v file="ruckus-$VERSION-$target.tar.gz" '$2 == file { print $1 }' dist/SHA256SUMS)
+            test -n "$sum"
+            sed -i "s/@SHA256:$target@/$sum/" dist/ruckus.rb
+          done
+          sed -i "s/@VERSION@/$VERSION/" dist/ruckus.rb
+          if grep -nE '@(VERSION|SHA256:[a-z0-9_-]+)@' dist/ruckus.rb; then
+            echo "::error::placeholders left in ruckus.rb"
+            exit 1
+          fi
+          ruby -c dist/ruckus.rb
+          cat dist/ruckus.rb
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ env.VERSION }}
+          path: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+            dist/ruckus.rb
+          if-no-files-found: error
+      - name: Create the GitHub release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "ruckus $VERSION" \
+            --generate-notes \
+            dist/*.tar.gz dist/SHA256SUMS dist/ruckus.rb

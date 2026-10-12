@@ -41,6 +41,29 @@ Needs tmux (`brew install tmux` or `apt install tmux`).
 cargo install --git https://github.com/SeamusMullan/ruckus
 ```
 
+That is the only way to install it for now. Tagged releases will carry
+ready-built archives for macOS and Linux (arm64 and x86_64), each with the
+binary, shell completions and a `SHA256SUMS` file to check them against. A
+Homebrew tap (`brew install SeamusMullan/ruckus/ruckus`) is planned to follow
+the first release.
+
+### Shell completions
+
+```sh
+source <(ruckus completions zsh)                              # zsh: in ~/.zshrc, after compinit
+eval "$(ruckus completions bash)"                             # bash: in ~/.bashrc
+ruckus completions fish > ~/.config/fish/completions/ruckus.fish
+```
+
+For zsh you can also save it once, in a directory on your `fpath`:
+`ruckus completions zsh > ~/.zfunc/_ruckus`, with
+`fpath=(~/.zfunc $fpath)` before `compinit`.
+
+Names complete from what you have: `ruckus up <Tab>` lists layouts,
+`ruckus shell <Tab>` and `-e <Tab>` list environments, and
+`ruckus uninstall <Tab>` lists installed distros. The script asks `ruckus`
+for them on each Tab, so `ruckus` must be on your `PATH`.
+
 ## Use
 
 ```sh
@@ -183,6 +206,12 @@ CI runs format, lint, tests and a smoke test of the release build on Linux and
 macOS, plus a real `ruckus install jazzy` that passes a message between two
 nodes and builds a package with colcon. It also runs weekly, to notice when
 upstream packages change.
+
+Pushing a tag such as `v0.1.0` runs the release workflow: it builds the four
+archives on native runners, writes `SHA256SUMS`, fills in the Homebrew formula
+template in [`packaging/homebrew`](packaging/homebrew/ruckus.rb), and attaches
+them all to a GitHub release. Running the workflow by hand does the same but
+publishes nothing; the files are kept as a workflow artifact.
 
 ## License
 

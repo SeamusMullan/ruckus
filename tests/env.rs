@@ -1,9 +1,9 @@
 //! `ruckus env`, `shell` and `run` against a fake ROS install and real shells.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
@@ -37,7 +37,12 @@ impl Sandbox {
     }
 
     fn ruckus(&self, shell: &str) -> assert_cmd::Command {
-        let mut cmd = cargo_bin_cmd!("ruckus");
+        assert_cmd::Command::from_std(self.command(env!("CARGO_BIN_EXE_ruckus"), shell))
+    }
+
+    /// `program` with this HOME and its XDG dirs, and no ROS or ruckus settings from outside.
+    fn command(&self, program: impl AsRef<OsStr>, shell: &str) -> Command {
+        let mut cmd = Command::new(program);
         cmd.env("HOME", self.home.path())
             .env("XDG_CONFIG_HOME", self.path(".config"))
             .env("XDG_CACHE_HOME", self.path(".cache"))
@@ -433,4 +438,123 @@ fn install_dry_run_resolves_from_robostack() {
         .stderr(predicate::str::contains(
             "RoboStack has no ready-built ROS 2 `lyrical`",
         ));
+}
+
+/// Values ruckus offers for the last word of `line` (not flags), asked as the fish script asks.
+fn complete(sb: &Sandbox, line: &[&str]) -> Vec<String> {
+    let out = sb
+        .ruckus("/bin/bash")
+        .env("COMPLETE", "fish")
+        .arg("--")
+        .args(line)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| line.split('\t').next().unwrap().to_string())
+        .filter(|value| !value.starts_with('-'))
+        .collect()
+}
+
+#[test]
+fn completes_environment_and_distro_names() {
+    let sb = Sandbox::new();
+    assert!(complete(&sb, &["ruckus", "shell", ""]).is_empty());
+    sb.create("lab");
+    sb.create("cs422");
+    // A broken file does not stop the others completing.
+    std::fs::write(sb.path(".config/ruckus/envs/broken.toml"), "nope").unwrap();
+    let distros = sb.path(".local/share/ruckus/distros");
+    std::fs::create_dir_all(distros.join("jazzy")).unwrap();
+    std::fs::write(distros.join("jazzy/ruckus.toml"), "").unwrap();
+    // Not a finished install.
+    std::fs::create_dir_all(distros.join("partial")).unwrap();
+
+    let all = ["broken", "cs422", "lab"];
+    assert_eq!(complete(&sb, &["ruckus", "shell", ""]), all);
+    assert_eq!(complete(&sb, &["ruckus", "run", "-e", ""]), all);
+    assert_eq!(complete(&sb, &["ruckus", "run", "--env", "l"]), ["lab"]);
+    assert_eq!(
+        complete(&sb, &["ruckus", "up", "turtle", "-e", "c"]),
+        ["cs422"]
+    );
+    assert_eq!(complete(&sb, &["ruckus", "env", "show", ""]), all);
+    assert_eq!(complete(&sb, &["ruckus", "env", "rm", "b"]), ["broken"]);
+    assert_eq!(complete(&sb, &["ruckus", "uninstall", ""]), ["jazzy"]);
+}
+
+#[test]
+fn completion_scripts_work_in_real_shells() {
+    let sb = Sandbox::new();
+    sb.create("lab");
+    // The scripts call `ruckus` on PATH.
+    let bin_dir = Path::new(env!("CARGO_BIN_EXE_ruckus")).parent().unwrap();
+    let path = format!(
+        "{}:{}",
+        bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let script = |shell: &str| {
+        let out = sb
+            .ruckus("/bin/bash")
+            .args(["completions", shell])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        let file = sb.path(shell).join("_ruckus");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, out.stdout).unwrap();
+        file
+    };
+    let run = |shell: &str, code: &str, arg: &Path| {
+        let out = sb
+            .command(shell, shell)
+            .env("PATH", &path)
+            .args(["-c", code, "test"])
+            .arg(arg)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{shell}: {out:?}");
+        String::from_utf8(out.stdout).unwrap()
+    };
+
+    for shell in shells() {
+        if shell.ends_with("/bash") {
+            let file = script("bash");
+            let out = run(
+                &shell,
+                r#"source "$1"
+                COMP_WORDS=(ruckus shell l)
+                COMP_CWORD=2
+                _clap_complete_ruckus ruckus l shell
+                printf '%s\n' "${COMPREPLY[@]}""#,
+                &file,
+            );
+            assert_eq!(out, "lab\n", "bash");
+        } else {
+            let file = script("zsh");
+            // Stand-ins for the completion system, which only loads in an interactive shell.
+            let stubs = r#"compdef() { :; }
+                _describe() { shift 2; print -rl -- "${(@P)1}"; }
+                words=(ruckus shell l)
+                CURRENT=3
+                "#;
+            // Sourced, as with `source <(ruckus completions zsh)`.
+            let out = run(
+                &shell,
+                &format!("{stubs}source \"$1\"; _clap_dynamic_completer_ruckus"),
+                &file,
+            );
+            assert_eq!(out, "lab\n", "zsh, sourced");
+            // From $fpath, as `_ruckus`: it must complete on the first Tab too.
+            let out = run(
+                &shell,
+                &format!("{stubs}fpath=(\"${{1:h}}\" $fpath); autoload -Uz _ruckus; _ruckus"),
+                &file,
+            );
+            assert_eq!(out, "lab\n", "zsh, from fpath");
+        }
+    }
 }
