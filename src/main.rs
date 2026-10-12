@@ -7,11 +7,12 @@ mod install;
 mod lock;
 mod shell;
 mod tmux;
+mod window;
 
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::{Args, CommandFactory, Parser, Subcommand};
 use clap_complete::{ArgValueCandidates, CompleteEnv};
 
@@ -200,6 +201,9 @@ struct UpArgs {
     /// Start the session without attaching to it
     #[arg(long, short)]
     detach: bool,
+    /// Attach in this terminal, instead of opening a new window
+    #[arg(long, conflicts_with = "detach")]
+    here: bool,
     /// Stop a running session of the same name first
     #[arg(long)]
     restart: bool,
@@ -384,6 +388,7 @@ fn run(cli: Cli) -> Result<()> {
 
 fn up(config: &Config, args: UpArgs) -> Result<()> {
     let layout = config.layout(&args.layout)?;
+    let custom_session = args.session.is_some();
     let session = args.session.unwrap_or_else(|| session_name(&args.layout));
     let overrides = Overrides {
         workspace: args.workspace,
@@ -404,10 +409,27 @@ fn up(config: &Config, args: UpArgs) -> Result<()> {
         Shell::from_env(),
     )?;
 
+    let open_window = !args.detach && !args.here && config.defaults.window.unwrap_or(true);
+
     if args.dry_run {
         let mut recorder = Recorder::default();
         plan.execute(&mut recorder)?;
         print!("{}", recorder.script());
+        if open_window && std::env::var_os("TMUX").is_none() {
+            let attach = ["tmux", "attach-session", "-t", &format!("={session}")].map(String::from);
+            match window::detect(&std::env::vars().collect(), std::env::consts::OS) {
+                Ok(terminal) => {
+                    let launch = window::launch(&terminal, &attach, std::env::consts::OS);
+                    let line: Vec<String> = launch.argv.iter().map(|a| quote(a)).collect();
+                    println!(
+                        "# then, in a new {} window: {}",
+                        terminal.name(),
+                        line.join(" ")
+                    );
+                }
+                Err(no) => println!("# then attach here ({})", no.reason()),
+            }
+        }
         return Ok(());
     }
 
@@ -416,7 +438,7 @@ fn up(config: &Config, args: UpArgs) -> Result<()> {
         if args.restart {
             tmux.run(&["kill-session".into(), "-t".into(), format!("={session}")])?;
         } else {
-            eprintln!("{session} is already running; attaching (use --restart to start it again)");
+            eprintln!("{session} is already running; opening it (use --restart to start it again)");
         }
     }
     if !tmux.has_session(&session) {
@@ -433,10 +455,87 @@ fn up(config: &Config, args: UpArgs) -> Result<()> {
     let mut attach = tmux.command();
     if std::env::var_os("TMUX").is_some() {
         attach.args(["switch-client", "-t", &format!("={session}")]);
-    } else {
-        attach.args(["attach-session", "-t", &format!("={session}")]);
+        return Err(attach.exec().into());
     }
+    if open_window {
+        let down = if custom_session {
+            format!("ruckus down {} --session {}", args.layout, quote(&session))
+        } else {
+            format!("ruckus down {}", args.layout)
+        };
+        match window::detect(&std::env::vars().collect(), std::env::consts::OS) {
+            Ok(terminal) => match open_in_window(&mut tmux, &terminal, &session) {
+                Ok(()) => {
+                    println!(
+                        "opened {session} in a new {} window; stop it with: {down}",
+                        terminal.name()
+                    );
+                    return Ok(());
+                }
+                Err(err) => eprintln!(
+                    "ruckus: could not open a new {} window ({err:#}); attaching here",
+                    terminal.name()
+                ),
+            },
+            Err(no) => eprintln!(
+                "ruckus: attaching here, since {} (detach with Ctrl+B d)",
+                no.reason()
+            ),
+        }
+    }
+    attach.args(["attach-session", "-t", &format!("={session}")]);
     Err(attach.exec().into())
+}
+
+/// Open a new window of `terminal` attached to `session`.
+fn open_in_window(
+    tmux: &mut RealTmux,
+    terminal: &window::TerminalApp,
+    session: &str,
+) -> Result<()> {
+    // Some launchers (`open` on macOS) start the window with a minimal
+    // environment, so name tmux and its server's socket by absolute path.
+    let tmux_bin = find_in_path("tmux").ok_or_else(|| anyhow::anyhow!("tmux is not on PATH"))?;
+    let socket = tmux.run(&[
+        "display-message".into(),
+        "-p".into(),
+        "-t".into(),
+        format!("={session}"),
+        "#{socket_path}".into(),
+    ])?;
+    let attach = vec![
+        tmux_bin.display().to_string(),
+        "-S".into(),
+        socket,
+        "attach-session".into(),
+        "-t".into(),
+        format!("={session}"),
+    ];
+    let launch = window::launch(terminal, &attach, std::env::consts::OS);
+    let mut command = std::process::Command::new(&launch.argv[0]);
+    command
+        .args(&launch.argv[1..])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        // Its own process group, so Ctrl+C here or closing this terminal leaves it alone.
+        .process_group(0);
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("cannot run {}", launch.argv[0]))?;
+    if launch.returns {
+        let status = child.wait()?;
+        if !status.success() {
+            bail!("{} exited with {status}", launch.argv[0]);
+        }
+    }
+    Ok(())
+}
+
+fn find_in_path(program: &str) -> Option<PathBuf> {
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join(program))
+        .find(|path| path.is_file())
 }
 
 fn session_name(layout: &str) -> String {

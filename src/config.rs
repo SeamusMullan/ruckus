@@ -29,6 +29,8 @@ pub struct Defaults {
     /// Shell lines run in every pane before anything else.
     #[serde(default)]
     pub pre: Vec<String>,
+    /// Open `ruckus up` sessions in a new terminal window [default: true].
+    pub window: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -105,6 +107,9 @@ impl Config {
         }
         if !other.defaults.pre.is_empty() {
             self.defaults.pre = other.defaults.pre;
+        }
+        if other.defaults.window.is_some() {
+            self.defaults.window = other.defaults.window;
         }
         self.layouts.extend(other.layouts);
     }

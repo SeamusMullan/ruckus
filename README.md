@@ -135,9 +135,16 @@ ruckus ls                    # turtle, pubsub, urdf, and yours
 ruckus show urdf             # what a layout runs
 ruckus up turtle -e jazzy    # start it, or attach if it is running
 ruckus up pubsub -w ~/ws     # use a different workspace
+ruckus up turtle --here      # attach in this terminal, not a new window
 ruckus up turtle --dry-run   # print the tmux commands instead
 ruckus down turtle
 ```
+
+`up` opens the session in a new window of your terminal, so the one you typed
+in stays free for `ruckus down`. That works in kitty, Ghostty, WezTerm,
+Alacritty, iTerm2, Terminal and GNOME Terminal; elsewhere, over SSH, or with
+`--here`, it attaches in the current terminal instead. Set `window = false`
+under `[defaults]` to always attach in place.
 
 In the session: click a pane (or Ctrl+B, arrow) to move, Ctrl+B z to zoom a
 pane, Ctrl+B d to leave it running.

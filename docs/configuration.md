@@ -8,6 +8,7 @@ or the file named by `--config` or `RUCKUS_CONFIG`). Everything in it is optiona
 env = "lab"                      # environment used when none is named
 ros_setup = "/opt/ros/jazzy"     # a ROS install to use without an environment
 pre = []                         # shell lines run before ROS loads
+window = true                    # `ruckus up` opens a new terminal window (false: attach in place)
 
 [layouts.nav]
 description = "Nav2 with RViz"

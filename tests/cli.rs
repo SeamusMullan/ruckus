@@ -68,7 +68,7 @@ fn unknown_layout_fails() {
 fn dry_run_prints_tmux_commands() {
     let home = tempfile::tempdir().unwrap();
     ruckus(home.path())
-        .args(["up", "turtle", "--dry-run"])
+        .args(["up", "turtle", "--dry-run", "--here"])
         .assert()
         .success()
         .stdout(predicate::str::contains("tmux new-session -d"))
@@ -304,4 +304,98 @@ fn completes_subcommands_and_layouts() {
         complete(home.path(), &["ruckus", "completions", ""]),
         ["zsh", "bash", "fish"]
     );
+}
+
+/// `ruckus` with no hint of which terminal it runs in.
+fn ruckus_in_terminal(home: &Path, vars: &[(&str, &str)]) -> assert_cmd::Command {
+    let mut cmd = ruckus(home);
+    for name in [
+        "KITTY_WINDOW_ID",
+        "KITTY_INSTALLATION_DIR",
+        "TERM_PROGRAM",
+        "TERM",
+        "GHOSTTY_RESOURCES_DIR",
+        "ALACRITTY_WINDOW_ID",
+        "ALACRITTY_SOCKET",
+        "KONSOLE_VERSION",
+        "GNOME_TERMINAL_SCREEN",
+        "GNOME_TERMINAL_SERVICE",
+        "WEZTERM_EXECUTABLE",
+        "SSH_CONNECTION",
+        "SSH_TTY",
+    ] {
+        cmd.env_remove(name);
+    }
+    cmd.env("DISPLAY", ":0");
+    for (name, value) in vars {
+        cmd.env(name, value);
+    }
+    cmd
+}
+
+#[test]
+fn up_opens_a_new_terminal_window() {
+    let home = tempfile::tempdir().unwrap();
+    let kitty = [
+        ("KITTY_WINDOW_ID", "1"),
+        (
+            "KITTY_INSTALLATION_DIR",
+            "/Applications/kitty.app/Contents/Resources/kitty",
+        ),
+    ];
+    let expected = if cfg!(target_os = "macos") {
+        "# then, in a new kitty window: open -n -a /Applications/kitty.app --args -o macos_quit_when_last_window_closed=yes tmux attach-session -t =ruckus-turtle\n"
+    } else {
+        "# then, in a new kitty window: kitty --detach tmux attach-session -t =ruckus-turtle\n"
+    };
+    ruckus_in_terminal(home.path(), &kitty)
+        .args(["up", "turtle", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::ends_with(expected));
+
+    // --here, --detach or `window = false` keep the old behaviour.
+    for extra in ["--here", "--detach"] {
+        ruckus_in_terminal(home.path(), &kitty)
+            .args(["up", "turtle", "--dry-run", extra])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("# then").not());
+    }
+    std::fs::create_dir(home.path().join("ruckus")).unwrap();
+    std::fs::write(
+        home.path().join("ruckus/config.toml"),
+        "[defaults]\nwindow = false\n",
+    )
+    .unwrap();
+    ruckus_in_terminal(home.path(), &kitty)
+        .args(["up", "turtle", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("# then").not());
+}
+
+#[test]
+fn up_attaches_here_when_no_window_can_open() {
+    let home = tempfile::tempdir().unwrap();
+    ruckus_in_terminal(
+        home.path(),
+        &[
+            ("KITTY_WINDOW_ID", "1"),
+            ("SSH_CONNECTION", "1.2.3.4 5 6.7.8.9 22"),
+        ],
+    )
+    .args(["up", "turtle", "--dry-run"])
+    .assert()
+    .success()
+    .stdout(predicate::str::ends_with(
+        "# then attach here (this is an SSH session)\n",
+    ));
+    ruckus_in_terminal(home.path(), &[("TERM", "xterm-256color")])
+        .args(["up", "turtle", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "ruckus does not know how to open a window in this terminal",
+        ));
 }
