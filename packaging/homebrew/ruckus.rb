@@ -2,7 +2,7 @@
 # The release workflow (.github/workflows/release.yml) fills in the version and
 # checksums and attaches the result to each GitHub release as ruckus.rb.
 class Ruckus < Formula
-  desc "Start ROS 2 sessions in tmux with one command"
+  desc "Install ROS 2, manage its environments and start sessions in tmux"
   homepage "https://github.com/SeamusMullan/ruckus"
   version "@VERSION@"
   license "Apache-2.0"
