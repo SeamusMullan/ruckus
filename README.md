@@ -61,10 +61,24 @@ a pane, Ctrl+B d to leave it running.
 ```sh
 ruckus install jazzy                 # desktop: RViz, turtlesim, demos, plus colcon and compilers
 ruckus install kilted --variant base # no GUI tools
-ruckus install jazzy --add ros-jazzy-navigation2   # extra packages; rerun to add more or update
+ruckus install jazzy --add ros-jazzy-navigation2   # extra packages; they stay on later runs
+ruckus install jazzy --remove ros-jazzy-navigation2
+ruckus install jazzy --update        # move everything to the newest versions
 ruckus install jazzy --dry-run       # what it would install, and the download size
-ruckus distros                       # what is installed
+ruckus distros                       # what is installed, and the lock files
 ruckus uninstall jazzy
+```
+
+Running `install` again keeps what earlier runs added, and keeps installed
+packages at their versions unless `--update` is given, so adding one package
+does not upgrade the rest.
+
+Each install writes `ruckus.lock` next to it, listing the exact packages. It
+uses the pixi lock format. To get the same install on another machine of the
+same platform, such as a classmate's laptop or CI, copy the file there and run:
+
+```sh
+ruckus install jazzy --lock ruckus.lock   # exactly these packages, no resolving
 ```
 
 Packages come from [RoboStack](https://robostack.github.io), which builds ROS

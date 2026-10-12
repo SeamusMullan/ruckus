@@ -2,6 +2,7 @@ mod clean;
 mod config;
 mod env;
 mod install;
+mod lock;
 mod shell;
 mod tmux;
 
@@ -72,15 +73,24 @@ enum Command {
     Install {
         /// Distro, e.g. jazzy or kilted (ros2_jazzy works too)
         distro: String,
-        /// Which ROS packages
-        #[arg(long, value_enum, default_value_t = Variant::Desktop)]
-        variant: Variant,
-        /// Extra conda package to install, e.g. ros-jazzy-turtlesim; repeat for more
+        /// Which ROS packages [default: desktop, or what is installed]
+        #[arg(long, value_enum)]
+        variant: Option<Variant>,
+        /// Extra conda package to install and keep, e.g. ros-jazzy-turtlesim; repeat for more
         #[arg(long = "add", value_name = "PACKAGE")]
         extra: Vec<String>,
-        /// Leave out colcon, cmake and compilers for building workspaces
+        /// Stop installing a package added before; repeat for more
+        #[arg(long, value_name = "PACKAGE")]
+        remove: Vec<String>,
+        /// Do not add colcon, cmake and compilers for building workspaces
         #[arg(long)]
         no_dev: bool,
+        /// Update every package to its newest version, instead of keeping installed ones
+        #[arg(long)]
+        update: bool,
+        /// Install exactly the packages in a ruckus.lock from another install, without resolving
+        #[arg(long, value_name = "FILE", conflicts_with_all = ["variant", "extra", "remove", "no_dev", "update"])]
+        lock: Option<PathBuf>,
         /// Do not create an environment named after the distro
         #[arg(long)]
         no_env: bool,
@@ -190,7 +200,10 @@ fn run(cli: Cli) -> Result<()> {
             distro,
             variant,
             extra,
+            remove,
             no_dev,
+            update,
+            lock,
             no_env,
             dry_run,
         } => {
@@ -198,7 +211,10 @@ fn run(cli: Cli) -> Result<()> {
                 distro: install::normalize(&distro)?,
                 variant,
                 extra,
+                remove,
                 dev: !no_dev,
+                update,
+                lock,
                 dry_run,
             };
             install_command(&request, no_env)
@@ -227,13 +243,22 @@ fn run(cli: Cli) -> Result<()> {
                 .map(|(name, _)| name.len())
                 .max()
                 .unwrap_or(0);
+            let dir = install::distros_dir()?;
+            let mut locks = vec![];
             for (name, meta) in distros {
                 println!(
                     "{name:width$}  {:?} ({} packages, {})",
                     meta.variant, meta.packages, meta.platform
                 );
+                let lock = dir.join(&name).join(lock::FILE);
+                if lock.is_file() {
+                    locks.push(lock);
+                }
             }
-            println!("in {}", install::distros_dir()?.display());
+            println!("in {}", dir.display());
+            for lock in locks {
+                println!("lock: {}", lock.display());
+            }
             Ok(())
         }
         Command::Up(args) => up(&config, args),

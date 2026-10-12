@@ -15,6 +15,7 @@ indicatif = "0.18.6"
 rattler = { version = "0.54.0", features = ["indicatif"] }
 rattler_cache = "0.10.18"
 rattler_conda_types = "0.56.2"
+rattler_lock = "0.34.6"
 rattler_repodata_gateway = { version = "0.36.3", features = ["gateway"] }
 rattler_shell = "0.29.3"
 rattler_solve = "11.2.1"

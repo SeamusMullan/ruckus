@@ -404,6 +404,152 @@ fn install_rejects_bad_names_before_any_download() {
         .stderr(predicate::str::contains("not a ROS distro name"));
 }
 
+/// The conda name of this platform, as lock files use it.
+fn platform() -> &'static str {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "osx-arm64",
+        ("macos", _) => "osx-64",
+        ("linux", "aarch64") => "linux-aarch64",
+        _ => "linux-64",
+    }
+}
+
+/// A ruckus.lock (pixi.lock format) with one tiny real package: an old tzdata.
+fn tzdata_lock(channel: &str, platform: &str) -> String {
+    let url = "https://conda.anaconda.org/conda-forge/noarch/tzdata-2024a-h8827d51_1.conda";
+    format!(
+        "version: 7\nplatforms:\n- name: {platform}\nenvironments:\n  default:\n    channels:\n    \
+         - url: https://conda.anaconda.org/{channel}/\n    \
+         - url: https://conda.anaconda.org/conda-forge/\n    packages:\n      {platform}:\n      \
+         - conda: {url}\npackages:\n- conda: {url}\n  sha256: \
+         7d21c95f61319dba9209ca17d1935e6128af4235a67ee4e57a00908a1450081e\n  \
+         md5: 8bfdead4e0fff0383ae4c9c50d0531bd\n  license: LicenseRef-Public-Domain\n  \
+         size: 124164\n  timestamp: 1724736371498\n"
+    )
+}
+
+#[test]
+fn install_checks_lock_files_and_removals_before_any_download() {
+    let sb = Sandbox::new();
+    let lock = sb.path("ruckus.lock");
+    std::fs::write(&lock, tzdata_lock("robostack-kilted", platform())).unwrap();
+    sb.ruckus("/bin/bash")
+        .args(["install", "jazzy", "--lock"])
+        .arg(&lock)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "is a lock for ROS 2 `kilted`, not `jazzy`",
+        ));
+    std::fs::write(&lock, tzdata_lock("robostack-jazzy", "win-64")).unwrap();
+    sb.ruckus("/bin/bash")
+        .args(["install", "jazzy", "--lock"])
+        .arg(&lock)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(format!(
+            "no packages for this platform, {} (it has: win-64)",
+            platform()
+        )));
+    sb.ruckus("/bin/bash")
+        .args(["install", "jazzy", "--add", "x", "--lock"])
+        .arg(&lock)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
+
+    let dir = sb.path(".local/share/ruckus/distros/fakey");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("ruckus.toml"),
+        "distro = \"fakey\"\nvariant = \"base\"\nspecs = [\"ros-fakey-ros-base\", \"cmake\"]\n\
+         channels = [\"robostack-fakey\"]\nplatform = \"osx-arm64\"\npackages = 3\ninstalled = 0\n",
+    )
+    .unwrap();
+    sb.ruckus("/bin/bash")
+        .args(["install", "fakey", "--remove", "ros-fakey-turtlesim"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "`ros-fakey-turtlesim` was not asked for, so it cannot be removed \
+             (asked for: ros-fakey-ros-base, cmake",
+        ));
+    sb.ruckus("/bin/bash")
+        .args(["install", "fakey", "--remove", "ros-fakey-ros-base"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("use --variant"));
+}
+
+/// Installs one tiny real package from a lock, then repeats the install from
+/// the lock that wrote. Needs the network.
+#[test]
+fn install_from_lock_is_exact_and_repeatable() {
+    if std::env::var_os("RUCKUS_NETWORK_TESTS").is_none() {
+        eprintln!("skipping: set RUCKUS_NETWORK_TESTS=1 to run");
+        return;
+    }
+    let sb = Sandbox::new();
+    let lock = sb.path("shared.lock");
+    std::fs::write(&lock, tzdata_lock("robostack-jazzy", platform())).unwrap();
+    sb.ruckus("/bin/bash")
+        .args(["install", "ros2_jazzy", "--no-env", "--lock"])
+        .arg(&lock)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("1 packages"));
+
+    let dir = sb.path(".local/share/ruckus/distros/jazzy");
+    assert!(
+        dir.join("prefix/conda-meta/tzdata-2024a-h8827d51_1.json")
+            .is_file()
+    );
+    let meta = std::fs::read_to_string(dir.join("ruckus.toml")).unwrap();
+    assert!(meta.contains("variant = \"base\""), "{meta}");
+    assert!(meta.contains("specs = [\"tzdata\"]"), "{meta}");
+    let written = std::fs::read_to_string(dir.join("ruckus.lock")).unwrap();
+    assert!(
+        written.contains("tzdata-2024a-h8827d51_1.conda"),
+        "{written}"
+    );
+    assert!(written.contains("robostack-jazzy"), "{written}");
+    sb.ruckus("/bin/bash")
+        .arg("distros")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "lock: {}",
+            dir.join("ruckus.lock").display()
+        )));
+
+    // A re-solve keeps the installed (old) tzdata; --update moves it on.
+    sb.ruckus("/bin/bash")
+        .args(["install", "jazzy", "--no-dev", "--dry-run"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("ros-jazzy-ros-base"))
+        .stderr(predicate::str::contains("0 changed, 0 removed"));
+    sb.ruckus("/bin/bash")
+        .args(["install", "jazzy", "--no-dev", "--dry-run", "--update"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("1 changed, 0 removed"));
+
+    // Someone else repeats the install from the lock this one wrote.
+    let other = Sandbox::new();
+    other
+        .ruckus("/bin/bash")
+        .args(["install", "jazzy", "--no-env", "--lock"])
+        .arg(dir.join("ruckus.lock"))
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read_to_string(other.path(".local/share/ruckus/distros/jazzy/ruckus.lock"))
+            .unwrap(),
+        written
+    );
+}
+
 /// Resolves real RoboStack package lists (no install). Needs the network, so
 /// it runs only when RUCKUS_NETWORK_TESTS is set, as it is in CI.
 #[test]

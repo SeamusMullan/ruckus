@@ -8,10 +8,13 @@
 //!   the directory a ROS install that environments can point at.
 //! - `colcon/`: this distro's `COLCON_HOME`, so colcon settings made for
 //!   another ROS in `~/.colcon` (such as its Python) do not leak in.
-//! - `ruckus.toml`: what was installed, written last. A directory without it
-//!   is an interrupted install; running `ruckus install` again finishes it.
+//! - `ruckus.lock`: the exact packages installed (see [`crate::lock`]), for
+//!   `ruckus install <distro> --lock` to repeat the install elsewhere.
+//! - `ruckus.toml`: what was asked for and installed, written last. A
+//!   directory without it is an interrupted install; running `ruckus install`
+//!   again finishes it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -21,8 +24,8 @@ use indicatif::{ProgressBar, ProgressStyle};
 use rattler::install::{IndicatifReporter, Installer};
 use rattler_cache::package_cache::PackageCache;
 use rattler_conda_types::{
-    Channel, ChannelConfig, GenericVirtualPackage, MatchSpec, ParseStrictness, RepoDataRecord,
-    Subdir,
+    Channel, ChannelConfig, GenericVirtualPackage, MatchSpec, ParseStrictness, PrefixRecord,
+    RepoDataRecord, Subdir,
 };
 use rattler_repodata_gateway::{Gateway, GatewayError};
 use rattler_shell::activation::{ActivationVariables, Activator, PathModificationBehavior};
@@ -31,6 +34,7 @@ use rattler_solve::{SolveError, SolverImpl, SolverTask, resolvo};
 use rattler_virtual_packages::{VirtualPackage, VirtualPackageOverrides};
 use serde::{Deserialize, Serialize};
 
+use crate::lock;
 use crate::tmux::quote;
 
 /// Which ROS metapackage to install.
@@ -63,11 +67,24 @@ const DEV_TOOLS: &[&str] = &[
     "rosdep",
 ];
 
+/// What to install. Requests add up: the specs of earlier installs of the
+/// distro are kept, so a package added once stays until it is removed.
+#[derive(Debug, Default)]
 pub struct Request {
     pub distro: String,
-    pub variant: Variant,
+    /// `None` keeps the installed variant (desktop for a new install).
+    pub variant: Option<Variant>,
+    /// Package specs to add; one for an already requested package replaces it.
     pub extra: Vec<String>,
+    /// Package names to stop requesting.
+    pub remove: Vec<String>,
+    /// Add colcon, cmake and compilers.
     pub dev: bool,
+    /// Let every package move to its newest version. Otherwise installed
+    /// packages keep their versions where they can.
+    pub update: bool,
+    /// Install exactly the packages in this lock file, with no solve.
+    pub lock: Option<PathBuf>,
     pub dry_run: bool,
 }
 
@@ -135,13 +152,93 @@ pub fn list() -> Result<Vec<(String, Meta)>> {
     Ok(distros)
 }
 
-pub fn specs(request: &Request) -> Vec<String> {
-    let mut specs = vec![request.variant.package(&request.distro)];
-    if request.dev {
-        specs.extend(DEV_TOOLS.iter().map(|tool| tool.to_string()));
+/// The `ruckus.toml` of a complete install in `dir`, if there is one.
+fn read_meta(dir: &Path) -> Result<Option<Meta>> {
+    let path = dir.join("ruckus.toml");
+    if !path.is_file() {
+        return Ok(None);
     }
-    specs.extend(request.extra.iter().cloned());
-    specs
+    let text = fs::read_to_string(&path)?;
+    let meta = toml::from_str(&text).with_context(|| format!("invalid {}", path.display()))?;
+    Ok(Some(meta))
+}
+
+/// The package a spec such as `cmake >=3.28` asks for.
+fn spec_name(spec: &str) -> String {
+    MatchSpec::from_str(spec, ParseStrictness::Lenient)
+        .ok()
+        .and_then(|spec| spec.name.as_exact().map(|n| n.as_normalized().to_string()))
+        .unwrap_or_else(|| {
+            let name = spec.split_whitespace().next().unwrap_or_default();
+            name.to_ascii_lowercase()
+        })
+}
+
+/// The variant and specs to solve for: the request merged into what an
+/// earlier install of the distro (`previous`) asked for.
+pub fn specs(request: &Request, previous: Option<&Meta>) -> Result<(Variant, Vec<String>)> {
+    let distro = &request.distro;
+    let mut specs = previous.map(|meta| meta.specs.clone()).unwrap_or_default();
+    let variant = match (request.variant, previous) {
+        (Some(variant), Some(meta)) if variant != meta.variant => {
+            let old = meta.variant.package(distro);
+            specs.retain(|spec| spec_name(spec) != old);
+            variant
+        }
+        (Some(variant), _) => variant,
+        (None, Some(meta)) => meta.variant,
+        (None, None) => Variant::Desktop,
+    };
+    let top = variant.package(distro);
+    if !specs.iter().any(|spec| spec_name(spec) == top) {
+        specs.insert(0, top.clone());
+    }
+    // Defaults never replace a spec asked for earlier, such as `cmake 3.28.*`.
+    if request.dev {
+        for tool in DEV_TOOLS {
+            if !specs.iter().any(|spec| spec_name(spec) == *tool) {
+                specs.push(tool.to_string());
+            }
+        }
+    }
+    for extra in &request.extra {
+        let name = spec_name(extra);
+        match specs.iter_mut().find(|spec| spec_name(spec) == name) {
+            Some(spec) => *spec = extra.clone(),
+            None => specs.push(extra.clone()),
+        }
+    }
+    for name in &request.remove {
+        let name = spec_name(name);
+        if name == top {
+            bail!("`{top}` is the {variant:?} variant itself; use --variant to change it");
+        }
+        if !specs.iter().any(|spec| spec_name(spec) == name) {
+            bail!(
+                "`{name}` was not asked for, so it cannot be removed (asked for: {})",
+                specs.join(", ")
+            );
+        }
+        specs.retain(|spec| spec_name(spec) != name);
+    }
+    Ok((variant, specs))
+}
+
+/// The packages nothing else in `records` depends on: what was asked for.
+fn top_level(records: &[RepoDataRecord]) -> Vec<String> {
+    let needed: HashSet<String> = records
+        .iter()
+        .flat_map(|r| &r.package_record.depends)
+        .map(|spec| spec_name(spec))
+        .collect();
+    let mut top: Vec<String> = records
+        .iter()
+        .map(|r| r.package_record.name.as_normalized().to_string())
+        .filter(|name| !needed.contains(name))
+        .collect();
+    top.sort();
+    top.dedup();
+    top
 }
 
 /// Resolve, then (unless a dry run) download and install. Returns the distro directory.
@@ -163,18 +260,135 @@ async fn install_async(request: &Request) -> Result<PathBuf> {
         .iter()
         .map(|name| Channel::from_str(name, &config))
         .collect::<Result<Vec<_>, _>>()?;
-    let spec_names = specs(request);
+    let previous = read_meta(&dir)?;
+    // Read for an interrupted install too, so the packages it got are kept.
+    let installed: Vec<PrefixRecord> = PrefixRecord::collect_from_prefix(&prefix)
+        .with_context(|| format!("cannot read the packages in {}", prefix.display()))?;
+
+    let cache = rattler_cache::default_cache_dir()?;
+    let package_cache = PackageCache::new(cache.join(rattler_cache::PACKAGE_CACHE_DIR));
+    let (variant, spec_names, records) = match &request.lock {
+        Some(path) => from_lock(path, distro, platform)?,
+        None => {
+            let (variant, spec_names) = specs(request, previous.as_ref())?;
+            let gateway = Gateway::builder()
+                .with_cache_dir(cache.join(rattler_cache::REPODATA_CACHE_DIR))
+                .with_package_cache(package_cache.clone())
+                .finish();
+            // Without this the solver picks the newest of everything, so adding
+            // one package could upgrade the whole install.
+            let locked: Vec<RepoDataRecord> = if request.update {
+                vec![]
+            } else {
+                installed
+                    .iter()
+                    .map(|r| r.repodata_record.clone())
+                    .collect()
+            };
+            let records = solve(&gateway, channels, platform, &spec_names, &locked).await?;
+            (variant, spec_names, records)
+        }
+    };
+
+    print_summary(&variant.package(distro), &records, &installed, &dir);
+    if request.dry_run {
+        return Ok(dir);
+    }
+
+    fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    let packages = records.len();
+    Installer::new()
+        .with_package_cache(package_cache)
+        .with_target_platform(platform)
+        .with_installed_packages(installed)
+        .with_reporter(IndicatifReporter::builder().clear_when_done(true).finish())
+        .install(&prefix, records.clone())
+        .await
+        .context("install failed; run the same command again to resume")?;
+
+    write_activation(&prefix, &dir)?;
+    let channel_urls = channel_names
+        .iter()
+        .map(|name| {
+            Ok(Channel::from_str(name, &config)?
+                .base_url
+                .as_str()
+                .to_string())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    lock::write(&dir.join(lock::FILE), &channel_urls, platform, &records)?;
+    let meta = Meta {
+        distro: distro.clone(),
+        variant,
+        specs: spec_names,
+        channels: channel_names.to_vec(),
+        platform: platform.to_string(),
+        packages,
+        installed: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs()),
+    };
+    fs::write(
+        dir.join("ruckus.toml"),
+        format!(
+            "# Written by `ruckus install {distro}`.\n{}",
+            toml::to_string(&meta)?
+        ),
+    )?;
+    Ok(dir)
+}
+
+/// The variant, specs and records of a lock file, checked to be for `distro`.
+fn from_lock(
+    path: &Path,
+    distro: &str,
+    platform: Subdir,
+) -> Result<(Variant, Vec<String>, Vec<RepoDataRecord>)> {
+    let locked = lock::read(path, platform)?;
+    match locked.distro.as_deref() {
+        Some(d) if d == distro => {}
+        Some(d) => bail!(
+            "{} is a lock for ROS 2 `{d}`, not `{distro}`\nhint: ruckus install {d} --lock {}",
+            path.display(),
+            path.display()
+        ),
+        None => bail!(
+            "{} names no ROS distro, so it is not a lock from `ruckus install`",
+            path.display()
+        ),
+    }
+    let desktop = Variant::Desktop.package(distro);
+    let has_desktop = locked
+        .records
+        .iter()
+        .any(|r| r.package_record.name.as_normalized() == desktop);
+    let variant = if has_desktop {
+        Variant::Desktop
+    } else {
+        Variant::Base
+    };
+    // A lock does not record what was asked for, so later re-solves keep
+    // what nothing else needs, which is what was asked for.
+    Ok((variant, top_level(&locked.records), locked.records))
+}
+
+/// Resolve `spec_names`, preferring the `locked` records where they still fit.
+async fn solve(
+    gateway: &Gateway,
+    channels: Vec<Channel>,
+    platform: Subdir,
+    spec_names: &[String],
+    locked: &[RepoDataRecord],
+) -> Result<Vec<RepoDataRecord>> {
     let specs = spec_names
         .iter()
         .map(|spec| MatchSpec::from_str(spec, ParseStrictness::Lenient))
         .collect::<Result<Vec<_>, _>>()?;
-
-    let cache = rattler_cache::default_cache_dir()?;
-    let package_cache = PackageCache::new(cache.join(rattler_cache::PACKAGE_CACHE_DIR));
-    let gateway = Gateway::builder()
-        .with_cache_dir(cache.join(rattler_cache::REPODATA_CACHE_DIR))
-        .with_package_cache(package_cache.clone())
-        .finish();
+    let distro = channels
+        .first()
+        .and_then(|c| c.name.as_deref()?.strip_prefix("robostack-"))
+        .unwrap_or("ROS")
+        .to_string();
 
     let progress = spinner(format!("fetching package lists for {distro} ({platform})"));
     let repodata = gateway
@@ -201,11 +415,12 @@ async fn install_async(request: &Request) -> Result<PathBuf> {
     let task = SolverTask {
         virtual_packages,
         specs,
+        locked_packages: locked.iter().collect(),
         ..SolverTask::from_iter(repodata.iter().map(|data| data.iter()))
     };
     let solved = resolvo::Solver.solve(task);
     progress.finish_and_clear();
-    let records = solved
+    Ok(solved
         .map_err(|err| match err {
             SolveError::Unsolvable(reasons) => anyhow::anyhow!(
                 "these packages cannot be installed together on {platform}:\n{}",
@@ -213,46 +428,28 @@ async fn install_async(request: &Request) -> Result<PathBuf> {
             ),
             err => anyhow::Error::new(err).context("cannot resolve packages"),
         })?
-        .records;
-
-    print_summary(request, &records, &dir);
-    if request.dry_run {
-        return Ok(dir);
-    }
-
-    fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
-    let packages = records.len();
-    Installer::new()
-        .with_package_cache(package_cache)
-        .with_target_platform(platform)
-        .with_reporter(IndicatifReporter::builder().clear_when_done(true).finish())
-        .install(&prefix, records)
-        .await
-        .context("install failed; run the same command again to resume")?;
-
-    write_activation(&prefix, &dir)?;
-    let meta = Meta {
-        distro: distro.clone(),
-        variant: request.variant,
-        specs: spec_names,
-        channels: channel_names.to_vec(),
-        platform: platform.to_string(),
-        packages,
-        installed: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |since| since.as_secs()),
-    };
-    fs::write(
-        dir.join("ruckus.toml"),
-        format!(
-            "# Written by `ruckus install {distro}`.\n{}",
-            toml::to_string(&meta)?
-        ),
-    )?;
-    Ok(dir)
+        .records)
 }
 
-fn print_summary(request: &Request, records: &[RepoDataRecord], dir: &Path) {
+/// How many packages are new, change version or build, or go away.
+fn changes(installed: &[RepoDataRecord], records: &[RepoDataRecord]) -> (usize, usize, usize) {
+    let key = |r: &RepoDataRecord| {
+        let p = &r.package_record;
+        let name = p.name.as_normalized().to_string();
+        (name, (p.version.to_string(), p.build.clone()))
+    };
+    let old: HashMap<_, _> = installed.iter().map(key).collect();
+    let new: HashMap<_, _> = records.iter().map(key).collect();
+    let added = new.keys().filter(|name| !old.contains_key(*name)).count();
+    let removed = old.keys().filter(|name| !new.contains_key(*name)).count();
+    let changed = new
+        .iter()
+        .filter(|(name, build)| old.get(*name).is_some_and(|old| old != *build))
+        .count();
+    (added, changed, removed)
+}
+
+fn print_summary(top: &str, records: &[RepoDataRecord], installed: &[PrefixRecord], dir: &Path) {
     let bytes: u64 = records.iter().filter_map(|r| r.package_record.size).sum();
     let versions: BTreeMap<&str, String> = records
         .iter()
@@ -263,15 +460,22 @@ fn print_summary(request: &Request, records: &[RepoDataRecord], dir: &Path) {
             )
         })
         .collect();
-    let top = request.variant.package(&request.distro);
     eprintln!(
         "{} {} with Python {}: {} packages, {} to download (less if cached)",
         top,
-        versions.get(top.as_str()).map_or("?", String::as_str),
+        versions.get(top).map_or("?", String::as_str),
         versions.get("python").map_or("?", String::as_str),
         records.len(),
         human_size(bytes),
     );
+    if !installed.is_empty() {
+        let installed: Vec<RepoDataRecord> = installed
+            .iter()
+            .map(|r| r.repodata_record.clone())
+            .collect();
+        let (added, changed, removed) = changes(&installed, records);
+        eprintln!("changes: {added} new, {changed} changed, {removed} removed");
+    }
     eprintln!("into {}", dir.display());
 }
 
@@ -370,24 +574,139 @@ mod tests {
         }
     }
 
+    fn meta(variant: Variant, specs: &[&str]) -> Meta {
+        Meta {
+            distro: "kilted".into(),
+            variant,
+            specs: specs.iter().map(|s| s.to_string()).collect(),
+            channels: vec![],
+            platform: "osx-arm64".into(),
+            packages: 0,
+            installed: 0,
+        }
+    }
+
     #[test]
     fn specs_follow_the_request() {
         let mut request = Request {
             distro: "kilted".into(),
-            variant: Variant::Base,
+            variant: Some(Variant::Base),
             extra: vec!["ros-kilted-turtlesim".into()],
-            dev: false,
-            dry_run: true,
+            ..Request::default()
         };
         assert_eq!(
-            specs(&request),
-            ["ros-kilted-ros-base", "ros-kilted-turtlesim"]
+            specs(&request, None).unwrap(),
+            (
+                Variant::Base,
+                vec!["ros-kilted-ros-base".into(), "ros-kilted-turtlesim".into()]
+            )
         );
-        request.variant = Variant::Desktop;
+        request.variant = None;
         request.dev = true;
-        let specs = specs(&request);
+        let (variant, specs) = specs(&request, None).unwrap();
+        assert_eq!(variant, Variant::Desktop);
         assert_eq!(specs[0], "ros-kilted-desktop");
         assert!(specs.iter().any(|s| s == "colcon-common-extensions"));
+    }
+
+    #[test]
+    fn specs_keep_what_was_asked_for_before() {
+        let before = meta(
+            Variant::Base,
+            &[
+                "ros-kilted-ros-base",
+                "cmake 3.28.*",
+                "ros-kilted-turtlesim",
+            ],
+        );
+        // A plain re-run keeps the added package, the variant, and the pinned cmake.
+        let request = Request {
+            distro: "kilted".into(),
+            dev: true,
+            ..Request::default()
+        };
+        let (variant, merged) = specs(&request, Some(&before)).unwrap();
+        assert_eq!(variant, Variant::Base);
+        assert_eq!(&merged[..3], before.specs.as_slice());
+        assert!(merged.contains(&"ninja".to_string()));
+        assert!(!merged.contains(&"cmake".to_string()));
+
+        // A newer spec for the same package replaces the old one, in place.
+        let request = Request {
+            distro: "kilted".into(),
+            extra: vec![
+                "ROS-kilted-turtlesim >=1.8".into(),
+                "ros-kilted-rviz2".into(),
+            ],
+            ..Request::default()
+        };
+        assert_eq!(
+            specs(&request, Some(&before)).unwrap().1,
+            [
+                "ros-kilted-ros-base",
+                "cmake 3.28.*",
+                "ROS-kilted-turtlesim >=1.8",
+                "ros-kilted-rviz2"
+            ]
+        );
+    }
+
+    #[test]
+    fn specs_change_variant_and_remove_packages() {
+        let before = meta(
+            Variant::Base,
+            &["ros-kilted-ros-base", "ros-kilted-turtlesim", "cmake"],
+        );
+        let request = Request {
+            distro: "kilted".into(),
+            variant: Some(Variant::Desktop),
+            remove: vec!["ros-kilted-turtlesim".into()],
+            ..Request::default()
+        };
+        assert_eq!(
+            specs(&request, Some(&before)).unwrap(),
+            (
+                Variant::Desktop,
+                vec!["ros-kilted-desktop".into(), "cmake".into()]
+            )
+        );
+
+        let remove = |name: &str| Request {
+            distro: "kilted".into(),
+            remove: vec![name.into()],
+            ..Request::default()
+        };
+        let err = specs(&remove("ros-kilted-ros-base"), Some(&before)).unwrap_err();
+        assert!(err.to_string().contains("use --variant"), "{err}");
+        let err = specs(&remove("ros-kilted-rviz2"), Some(&before)).unwrap_err();
+        assert!(err.to_string().contains("was not asked for"), "{err}");
+    }
+
+    #[test]
+    fn spec_names() {
+        assert_eq!(spec_name("cmake"), "cmake");
+        assert_eq!(spec_name("cmake >=3.28,<4"), "cmake");
+        assert_eq!(spec_name("python_abi 3.12.* *_cp312"), "python_abi");
+        assert_eq!(spec_name("conda-forge::Ninja"), "ninja");
+    }
+
+    #[test]
+    fn top_level_is_what_nothing_needs() {
+        let records = [
+            lock::tests::record("ros-kilted-desktop", "0.12.0", &["ros-kilted-ros-base"]),
+            lock::tests::record("ros-kilted-ros-base", "0.12.0", &["python >=3.12"]),
+            lock::tests::record("python", "3.12.1", &[]),
+            lock::tests::record("cmake", "3.30.0", &[]),
+        ];
+        assert_eq!(top_level(&records), ["cmake", "ros-kilted-desktop"]);
+    }
+
+    #[test]
+    fn changes_are_counted() {
+        let r = lock::tests::record;
+        let old = [r("a", "1", &[]), r("b", "1", &[]), r("c", "1", &[])];
+        let new = [r("a", "1", &[]), r("b", "2", &[]), r("d", "1", &[])];
+        assert_eq!(changes(&old, &new), (1, 1, 1));
     }
 
     #[test]
