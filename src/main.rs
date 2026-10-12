@@ -1,5 +1,6 @@
 mod clean;
 mod config;
+mod deps;
 mod env;
 mod install;
 mod lock;
@@ -95,6 +96,20 @@ enum Command {
         #[arg(long)]
         no_env: bool,
         /// Resolve and show what would be installed, without installing
+        #[arg(long, short = 'n')]
+        dry_run: bool,
+    },
+    /// Install a workspace's dependencies into a distro from `ruckus install`
+    Deps {
+        /// Workspace, or a directory of packages [default: current directory]
+        workspace: Option<PathBuf>,
+        /// Environment whose ROS gets the packages [default: `env` in [defaults]]
+        #[arg(long, short)]
+        env: Option<String>,
+        /// Installed distro to add to, instead of an environment's
+        #[arg(long, conflicts_with = "env")]
+        distro: Option<String>,
+        /// Show what is missing, without installing
         #[arg(long, short = 'n')]
         dry_run: bool,
     },
@@ -219,6 +234,20 @@ fn run(cli: Cli) -> Result<()> {
             };
             install_command(&request, no_env)
         }
+        Command::Deps {
+            workspace,
+            env,
+            distro,
+            dry_run,
+        } => deps::run(
+            &config,
+            deps::Args {
+                workspace,
+                env,
+                distro,
+                dry_run,
+            },
+        ),
         Command::Uninstall { distro } => {
             let distro = install::normalize(&distro)?;
             let dir = install::uninstall(&distro)?;
