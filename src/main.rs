@@ -1,4 +1,5 @@
 mod clean;
+mod complete;
 mod config;
 mod deps;
 mod env;
@@ -11,7 +12,8 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap_complete::{ArgValueCandidates, CompleteEnv};
 
 use config::{Config, expand_tilde};
 use env::Env;
@@ -52,6 +54,7 @@ enum Command {
     Up(UpArgs),
     /// Stop a layout's tmux session
     Down {
+        #[arg(add = ArgValueCandidates::new(complete::layouts))]
         layout: String,
         /// Session name [default: ruckus-<layout>]
         #[arg(long)]
@@ -61,13 +64,17 @@ enum Command {
     #[command(alias = "layouts")]
     Ls,
     /// Show what a layout runs
-    Show { layout: String },
+    Show {
+        #[arg(add = ArgValueCandidates::new(complete::layouts))]
+        layout: String,
+    },
     /// Manage environments: a ROS install plus workspaces and settings
     #[command(subcommand)]
     Env(EnvCommand),
     /// Open a shell with an environment loaded
     Shell {
         /// Environment [default: `env` in [defaults]]
+        #[arg(add = ArgValueCandidates::new(complete::envs))]
         env: Option<String>,
     },
     /// Install a ready-built ROS 2 distro (from RoboStack), with an environment for it
@@ -104,17 +111,20 @@ enum Command {
         /// Workspace, or a directory of packages [default: current directory]
         workspace: Option<PathBuf>,
         /// Environment whose ROS gets the packages [default: `env` in [defaults]]
-        #[arg(long, short)]
+        #[arg(long, short, add = ArgValueCandidates::new(complete::envs))]
         env: Option<String>,
         /// Installed distro to add to, instead of an environment's
-        #[arg(long, conflicts_with = "env")]
+        #[arg(long, conflicts_with = "env", add = ArgValueCandidates::new(complete::distros))]
         distro: Option<String>,
         /// Show what is missing, without installing
         #[arg(long, short = 'n')]
         dry_run: bool,
     },
     /// Delete a distro installed with `ruckus install`
-    Uninstall { distro: String },
+    Uninstall {
+        #[arg(add = ArgValueCandidates::new(complete::distros))]
+        distro: String,
+    },
     /// List distros installed with `ruckus install`
     Distros,
     /// Used by ruckus inside the shells it starts
@@ -123,12 +133,14 @@ enum Command {
     /// Run one command with an environment loaded
     Run {
         /// Environment [default: `env` in [defaults]]
-        #[arg(long, short)]
+        #[arg(long, short, add = ArgValueCandidates::new(complete::envs))]
         env: Option<String>,
         /// The command and its arguments
         #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
     },
+    /// Print a shell completion script
+    Completions { shell: complete::Shell },
 }
 
 #[derive(Subcommand)]
@@ -161,13 +173,20 @@ enum EnvCommand {
     /// List environments
     Ls,
     /// Show an environment and check that its parts exist
-    Show { name: String },
+    Show {
+        #[arg(add = ArgValueCandidates::new(complete::envs))]
+        name: String,
+    },
     /// Delete an environment (the ROS install and workspaces are not touched)
-    Rm { name: String },
+    Rm {
+        #[arg(add = ArgValueCandidates::new(complete::envs))]
+        name: String,
+    },
 }
 
 #[derive(Args)]
 struct UpArgs {
+    #[arg(add = ArgValueCandidates::new(complete::layouts))]
     layout: String,
     /// Session name [default: ruckus-<layout>]
     #[arg(long)]
@@ -188,11 +207,15 @@ struct UpArgs {
     #[arg(long, short = 'n')]
     dry_run: bool,
     /// Environment to load, instead of the layout's or the default
-    #[arg(long, short)]
+    #[arg(long, short, add = ArgValueCandidates::new(complete::envs))]
     env: Option<String>,
 }
 
 fn main() {
+    // Answers the completion scripts' callbacks (COMPLETE=<shell>), then exits.
+    CompleteEnv::with_factory(Cli::command)
+        .var(complete::VAR)
+        .complete();
     if let Err(err) = run(Cli::parse()) {
         eprintln!("error: {err:#}");
         std::process::exit(1);
@@ -208,9 +231,14 @@ fn run(cli: Cli) -> Result<()> {
         }
         return Ok(());
     }
+    if let Command::Completions { shell } = cli.command {
+        // Before loading the config, so a broken config cannot break completion setup.
+        print!("{}", complete::script(shell)?);
+        return Ok(());
+    }
     let config = Config::load(cli.config.as_deref())?;
     match cli.command {
-        Command::Internal(_) => unreachable!("handled above"),
+        Command::Internal(_) | Command::Completions { .. } => unreachable!("handled above"),
         Command::Install {
             distro,
             variant,

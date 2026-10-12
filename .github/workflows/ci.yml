@@ -91,6 +91,7 @@ jobs:
           $bin ls
           $bin show turtle
           $bin up turtle --dry-run
+          $bin completions zsh | grep -q '#compdef ruckus'
           # A missing package must fail, not start a broken session.
           if $bin up robot --dry-run --workspace "$RUNNER_TEMP"; then exit 1; fi
           # Start and stop a real session from a user config.

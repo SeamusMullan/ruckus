@@ -234,3 +234,74 @@ fn up_and_down_with_real_tmux() {
         .failure()
         .stderr(predicate::str::contains("no session named ruckus-demo"));
 }
+
+/// Values ruckus offers for the last word of `line` (not flags), asked as the fish script asks.
+fn complete(config_home: &Path, line: &[&str]) -> Vec<String> {
+    let out = ruckus(config_home)
+        .env("COMPLETE", "fish")
+        .arg("--")
+        .args(line)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| line.split('\t').next().unwrap().to_string())
+        .filter(|value| !value.starts_with('-'))
+        .collect()
+}
+
+#[test]
+fn prints_completion_scripts() {
+    let home = tempfile::tempdir().unwrap();
+    // A broken config must not break completion setup in the user's rc file.
+    std::fs::create_dir_all(home.path().join("ruckus")).unwrap();
+    std::fs::write(home.path().join("ruckus/config.toml"), "nope").unwrap();
+    for (shell, expected) in [
+        ("zsh", "#compdef ruckus"),
+        ("bash", "-F _clap_complete_ruckus ruckus"),
+        ("fish", "complete --keep-order --exclusive --command ruckus"),
+    ] {
+        ruckus(home.path())
+            .args(["completions", shell])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(expected))
+            .stdout(predicate::str::contains("COMPLETE="));
+    }
+    ruckus(home.path())
+        .args(["completions", "tcsh"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn completes_subcommands_and_layouts() {
+    let home = tempfile::tempdir().unwrap();
+    let commands = complete(home.path(), &["ruckus", ""]);
+    for command in ["up", "down", "env", "shell", "install", "completions"] {
+        assert!(
+            commands.iter().any(|c| c == command),
+            "{command}: {commands:?}"
+        );
+    }
+    assert!(!commands.iter().any(|c| c == "internal"), "{commands:?}");
+
+    std::fs::create_dir_all(home.path().join("ruckus")).unwrap();
+    std::fs::write(
+        home.path().join("ruckus/config.toml"),
+        "[layouts.mine]\npanes = [{ run = \"echo\" }]\n",
+    )
+    .unwrap();
+    assert_eq!(
+        complete(home.path(), &["ruckus", "up", ""]),
+        ["mine", "pubsub", "robot", "turtle"]
+    );
+    assert_eq!(complete(home.path(), &["ruckus", "show", "tu"]), ["turtle"]);
+    assert_eq!(complete(home.path(), &["ruckus", "down", "p"]), ["pubsub"]);
+    assert_eq!(
+        complete(home.path(), &["ruckus", "completions", ""]),
+        ["zsh", "bash", "fish"]
+    );
+}
