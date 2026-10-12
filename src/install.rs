@@ -450,7 +450,17 @@ fn changes(installed: &[RepoDataRecord], records: &[RepoDataRecord]) -> (usize, 
 }
 
 fn print_summary(top: &str, records: &[RepoDataRecord], installed: &[PrefixRecord], dir: &Path) {
-    let bytes: u64 = records.iter().filter_map(|r| r.package_record.size).sum();
+    // Only what is not in the prefix yet needs fetching; an add to an
+    // existing install should not report the whole distro's size.
+    let have: std::collections::HashSet<&str> = installed
+        .iter()
+        .map(|r| r.repodata_record.url.as_str())
+        .collect();
+    let bytes: u64 = records
+        .iter()
+        .filter(|r| !have.contains(r.url.as_str()))
+        .filter_map(|r| r.package_record.size)
+        .sum();
     let versions: BTreeMap<&str, String> = records
         .iter()
         .map(|r| {
@@ -555,6 +565,8 @@ pub fn human_size(bytes: u64) -> String {
     let mb = bytes as f64 / 1_000_000.0;
     if mb >= 1000.0 {
         format!("{:.1} GB", mb / 1000.0)
+    } else if mb < 1.0 {
+        format!("{:.0} kB", mb * 1000.0)
     } else {
         format!("{mb:.0} MB")
     }
@@ -755,5 +767,6 @@ mod tests {
     fn sizes_read_well() {
         assert_eq!(human_size(412_300_000), "412 MB");
         assert_eq!(human_size(2_345_000_000), "2.3 GB");
+        assert_eq!(human_size(48_200), "48 kB");
     }
 }
