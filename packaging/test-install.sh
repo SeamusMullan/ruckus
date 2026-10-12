@@ -27,7 +27,7 @@ tar -C "$work/pkg" -czf "$release/$name.tar.gz" "$name"
 (cd "$release" && { sha256sum "$name.tar.gz" 2>/dev/null || shasum -a 256 "$name.tar.gz"; } > SHA256SUMS)
 
 cat > "$work/serve.py" <<'PY'
-import http.server, os, sys
+import http.server, os, socketserver, sys
 version = sys.argv[2]
 class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
@@ -43,8 +43,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     do_HEAD = do_GET
     def log_message(self, *args):
         pass
+class Server(http.server.ThreadingHTTPServer):
+    # HTTPServer.server_bind looks up the host's name, which can hang for
+    # minutes on CI runners with slow reverse DNS. The name is not needed.
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = "localhost", self.server_address[1]
 os.chdir(sys.argv[1])
-server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+server = Server(("127.0.0.1", 0), Handler)
 print(server.server_address[1], flush=True)
 server.serve_forever()
 PY
