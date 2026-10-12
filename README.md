@@ -98,3 +98,7 @@ cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test
 The tmux tests run on a private server (`RUCKUS_TMUX_SOCKET`), so they never
 touch your own sessions. CI runs format, lint, tests and a smoke test of the
 release build on Linux and macOS.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).

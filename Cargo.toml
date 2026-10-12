@@ -2,6 +2,7 @@
 name = "ruckus"
 version = "0.1.0"
 edition = "2024"
+license = "Apache-2.0"
 description = "Start ROS 2 sessions in tmux with one command, and (soon) install and manage ROS 2 itself"
 repository = "https://github.com/SeamusMullan/ruckus"
 keywords = ["ros2", "ros", "tmux", "robotics", "cli"]
