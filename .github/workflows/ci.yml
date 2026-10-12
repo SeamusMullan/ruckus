@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: Lint (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --locked --all-targets -- -D warnings
+
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      TERM: xterm-256color
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install tmux
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then brew install tmux; else sudo apt-get update && sudo apt-get install -y tmux; fi
+          tmux -V
+      - run: cargo test --locked
+
+  smoke:
+    name: Smoke test release build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      TERM: xterm-256color
+      RUCKUS_TMUX_SOCKET: ruckus-smoke
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install tmux
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then brew install tmux; else sudo apt-get update && sudo apt-get install -y tmux; fi
+      - run: cargo build --locked --release
+      - name: Run the binary like a user would
+        run: |
+          set -eux
+          bin=target/release/ruckus
+          $bin --version
+          $bin --help
+          $bin ls
+          $bin show turtle
+          $bin up turtle --dry-run
+          # A missing package must fail, not start a broken session.
+          if $bin up robot --dry-run --workspace "$RUNNER_TEMP"; then exit 1; fi
+          # Start and stop a real session from a user config.
+          mkdir -p "$RUNNER_TEMP/cfg/ruckus"
+          printf '[layouts.smoke]\npanes = [{ run = "echo a" }, { run = "echo b" }]\n' > "$RUNNER_TEMP/cfg/ruckus/config.toml"
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/cfg"
+          $bin up smoke --detach
+          test "$(tmux -L ruckus-smoke list-panes -t =ruckus-smoke | wc -l)" -eq 2
+          $bin down smoke
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ruckus-${{ matrix.os }}
+          path: target/release/ruckus

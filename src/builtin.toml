@@ -1,0 +1,36 @@
+# Layouts that ship with ruckus.
+# Add your own, or override these by name, in ~/.config/ruckus/config.toml.
+# Panes are tiled left to right, top to bottom.
+
+[layouts.turtle]
+description = "turtlesim with teleop, a cmd_vel echo and the topic list"
+panes = [
+  { run = "ros2 run turtlesim turtlesim_node" },
+  { run = "ros2 run turtlesim turtle_teleop_key", focus = true },
+  { run = "ros2 topic echo /turtle1/cmd_vel geometry_msgs/msg/Twist", delay = 3 },
+  { run = "ros2 topic list -v", delay = 3 },
+]
+
+[layouts.pubsub]
+description = "py_pubsub talker and listener with a /topic echo"
+workspace = "~/ros2_ws"
+requires = ["py_pubsub"]
+hint = "Create py_pubsub (ROS 2 tutorial: Writing a simple publisher and subscriber, Python), then run `colcon build` in the workspace."
+panes = [
+  { run = "ros2 run py_pubsub talker" },
+  { run = "ros2 run py_pubsub listener" },
+  { run = "ros2 topic echo /topic std_msgs/msg/String", delay = 3 },
+  { run = "ros2 topic list", delay = 3 },
+]
+
+[layouts.robot]
+description = "urdf_robot launch file with RViz and a /joint_states echo"
+workspace = "~/polar_ws"
+requires = ["urdf_robot"]
+hint = "Create the urdf_robot package with a launch/robot_launch.py, then run `colcon build` in the workspace."
+panes = [
+  { run = "ros2 launch urdf_robot robot_launch.py" },
+  { run = "if [ -f src/urdf_robot/urdf/urdf.rviz ]; then rviz2 -d src/urdf_robot/urdf/urdf.rviz; else rviz2; fi", delay = 2 },
+  { run = "ros2 topic echo /joint_states sensor_msgs/msg/JointState", delay = 3 },
+  { run = "ros2 node list", delay = 3 },
+]
