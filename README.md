@@ -19,8 +19,9 @@ $ ruckus up turtle
 └──────────────────────────┴──────────────────────────┘
 ```
 
-> **Status:** early. `ruckus up` works today. Installing ROS 2 and managing
-> environments are planned; see the [roadmap](#roadmap).
+> **Status:** early. Layouts (`ruckus up`) and environments (`ruckus env`,
+> `shell`, `run`) work today. Installing ROS 2 itself is next; see the
+> [roadmap](#roadmap).
 
 ## Install
 
@@ -45,6 +46,38 @@ ruckus down turtle           # stop it
 Inside the session: click a pane (or Ctrl+B, arrow) to move, Ctrl+B z to zoom
 a pane, Ctrl+B d to leave it running.
 
+## Environments
+
+An environment is a ROS install plus the workspaces you overlay on it, saved
+under a name. Use one to get a shell, run a single command, or start a layout.
+
+```sh
+ruckus env create lab --ros ~/ros2_lyrical/install --ws ~/polar_ws --var ROS_DOMAIN_ID=7
+ruckus env ls                     # * marks the default
+ruckus env show lab               # checks the install and workspaces exist and are built
+ruckus shell lab                  # your usual shell, with ROS and ~/polar_ws loaded
+ruckus run -e lab -- ros2 topic list
+ruckus up robot -e lab            # a layout in that environment
+ruckus env rm lab                 # forgets it; never touches the install
+```
+
+`--ros` takes an install directory (ruckus picks `setup.zsh` or
+`setup.bash` to match your shell) or a setup file. `--ws` can repeat; the
+workspaces are overlaid in order, and layouts without their own workspace run
+in the last one. `--pre` adds shell lines that run before ROS loads, such as a
+`PATH` change.
+
+Each environment is a small TOML file in `~/.config/ruckus/envs/` that you can
+edit by hand. Set a default with `env = "lab"` under `[defaults]` in
+`config.toml`; then `ruckus shell`, `ruckus run` and `ruckus up` use it
+without `-e`.
+
+`ruckus shell` runs your normal rc files first (`.zshrc` or `.bashrc`), so your
+prompt and aliases stay, and sets `RUCKUS_ENV` to the environment's name.
+ROS is always loaded by sourcing its setup files inside the shell. On macOS
+this matters: System Integrity Protection strips the `DYLD_*` variables ROS
+needs from any environment passed to `/bin/zsh` or `/bin/bash`.
+
 ## Configure
 
 ruckus reads `~/.config/ruckus/config.toml` (or `$XDG_CONFIG_HOME/ruckus/`,
@@ -53,8 +86,9 @@ the name matches.
 
 ```toml
 [defaults]
-ros_setup = "/opt/ros/jazzy/setup.bash"   # sourced in every pane
-pre = []                                  # shell lines run before that
+env = "lab"                               # environment used when none is named
+ros_setup = "/opt/ros/jazzy"              # or a ROS install, without an environment
+pre = []                                  # shell lines run before ROS loads
 
 [layouts.nav]
 description = "Nav2 with RViz"
@@ -75,6 +109,11 @@ panes = [
 | `delay`  | Seconds to wait first, so earlier nodes are up. |
 | `focus`  | This pane gets the keyboard. |
 
+A layout can also set `env`, `ros_setup` and `pre`. The command line beats the
+layout, the layout beats the environment, and the environment beats
+`[defaults]`. `pre` lines add up instead: defaults, then environment, then
+layout.
+
 Built-in layouts: `turtle` (turtlesim), `pubsub` (the Python talker/listener
 tutorial) and `robot` (a URDF package with RViz). See
 [`src/builtin.toml`](src/builtin.toml).
@@ -83,7 +122,7 @@ tutorial) and `robot` (a URDF package with RViz). See
 
 1. **`ruckus up`**: tmux layouts from config. *Done.*
 2. **`ruckus env`**: named environments, each a ROS install plus workspaces,
-   used by `up` and `ruckus shell`.
+   used by `up`, `shell` and `run`. *Done.*
 3. **`ruckus install <distro>`**: ready-built ROS 2 from RoboStack, installed
    natively through the rattler library, no pixi or conda needed.
 4. **Source builds**: an automated, repeatable source build for distros with

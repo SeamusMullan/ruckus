@@ -6,6 +6,8 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 
 use crate::config::{Defaults, Layout, expand_tilde};
+use crate::env::Env;
+use crate::shell::{Activation, Shell};
 
 /// Values from the command line that override the layout.
 #[derive(Debug, Default)]
@@ -27,40 +29,55 @@ pub struct Plan {
 }
 
 impl Plan {
+    /// Resolve where ROS, the workspaces and the working directory come from.
+    ///
+    /// Precedence, highest first: command line, layout, environment, `[defaults]`.
+    /// `pre` lines add up in the opposite order: defaults, then env, then layout.
     pub fn new(
         name: &str,
         session: &str,
         layout: &Layout,
         defaults: &Defaults,
+        env: Option<&Env>,
         overrides: &Overrides,
+        shell: Shell,
     ) -> Result<Self> {
-        let workspace = overrides
+        let ros = overrides
+            .ros_setup
+            .clone()
+            .or_else(|| layout.ros_setup.as_deref().map(expand_tilde))
+            .or_else(|| env.and_then(Env::ros_path))
+            .or_else(|| defaults.ros_setup.as_deref().map(expand_tilde));
+
+        let mut workspaces = env.map(Env::workspace_paths).unwrap_or_default();
+        let workdir = overrides
             .workspace
             .clone()
-            .or_else(|| layout.workspace.as_deref().map(expand_tilde));
-        let ros_setup = overrides.ros_setup.clone().or_else(|| {
-            layout
-                .ros_setup
-                .as_deref()
-                .or(defaults.ros_setup.as_deref())
-                .map(expand_tilde)
-        });
-
-        if let Some(ros_setup) = &ros_setup
-            && !ros_setup.is_file()
-        {
-            bail!("ROS setup file not found: {}", ros_setup.display());
-        }
-        if let Some(workspace) = &workspace {
-            check_requires(workspace, &layout.requires, layout.hint.as_deref())?;
+            .or_else(|| layout.workspace.as_deref().map(expand_tilde))
+            .or_else(|| workspaces.last().cloned());
+        if let Some(workdir) = &workdir {
+            check_requires(workdir, &layout.requires, layout.hint.as_deref())?;
+            if !workspaces.contains(workdir) {
+                workspaces.push(workdir.clone());
+            }
         }
 
-        let pre = if layout.pre.is_empty() {
-            &defaults.pre
-        } else {
-            &layout.pre
-        };
-        let setup = setup_line(pre, ros_setup.as_deref(), workspace.as_deref());
+        let mut pre = defaults.pre.clone();
+        if let Some(env) = env {
+            pre.extend(env.pre.iter().cloned());
+        }
+        pre.extend(layout.pre.iter().cloned());
+        let vars = env.map(|env| env.vars.clone()).unwrap_or_default();
+
+        let activation = Activation::resolve(ros.as_deref(), &workspaces, pre, vars, shell)?;
+        let mut setup = activation.lines();
+        if let Some(workdir) = &workdir {
+            setup.push(format!("cd {}", quote(&workdir.display().to_string())));
+        }
+        if !setup.is_empty() {
+            setup.push("clear".into());
+        }
+
         let commands = layout
             .panes
             .iter()
@@ -74,8 +91,8 @@ impl Plan {
         Ok(Self {
             session: session.to_string(),
             window: name.to_string(),
-            start_dir: workspace,
-            setup,
+            start_dir: workdir,
+            setup: setup.join("; "),
             commands,
             focus: layout.focus(),
         })
@@ -150,44 +167,6 @@ fn check_requires(workspace: &Path, requires: &[String], hint: Option<&str>) -> 
         message.push_str(hint);
     }
     bail!(message)
-}
-
-/// `pre; source <ros>; source <ws>/install/setup.<ext>; cd <ws>; clear`
-fn setup_line(pre: &[String], ros_setup: Option<&Path>, workspace: Option<&Path>) -> String {
-    let mut parts: Vec<String> = pre.to_vec();
-    if let Some(ros_setup) = ros_setup {
-        parts.push(format!(
-            "source {}",
-            quote(&ros_setup.display().to_string())
-        ));
-    }
-    if let Some(workspace) = workspace {
-        // Match the overlay to the shell the ROS setup file is written for.
-        let ext = ros_setup
-            .and_then(Path::extension)
-            .and_then(|ext| ext.to_str())
-            .unwrap_or_else(|| shell_ext());
-        let overlay = workspace.join("install").join(format!("setup.{ext}"));
-        if overlay.is_file() {
-            parts.push(format!("source {}", quote(&overlay.display().to_string())));
-        }
-        parts.push(format!("cd {}", quote(&workspace.display().to_string())));
-    }
-    if !parts.is_empty() {
-        parts.push("clear".into());
-    }
-    parts.join("; ")
-}
-
-fn shell_ext() -> &'static str {
-    let shell = std::env::var("SHELL").unwrap_or_default();
-    if shell.ends_with("zsh") {
-        "zsh"
-    } else if shell.ends_with("bash") {
-        "bash"
-    } else {
-        "sh"
-    }
 }
 
 /// Quote for a POSIX shell, leaving plain words alone.
@@ -324,7 +303,9 @@ mod tests {
             "ruckus-t",
             &layout,
             &Defaults::default(),
+            None,
             &Overrides::default(),
+            Shell::Bash,
         )
         .unwrap();
         assert_eq!(plan.commands, ["a", "b", "sleep 2; c", ""]);
@@ -364,14 +345,14 @@ mod tests {
             panes = [{ run = "x" }]"#,
         );
         let defaults = Defaults {
-            ros_setup: None,
             pre: vec!["export A=1".into()],
+            ..Defaults::default()
         };
         let overrides = Overrides {
             workspace: Some(ws.clone()),
             ros_setup: Some(ros.clone()),
         };
-        let plan = Plan::new("t", "s", &layout, &defaults, &overrides).unwrap();
+        let plan = Plan::new("t", "s", &layout, &defaults, None, &overrides, Shell::Zsh).unwrap();
         assert_eq!(
             plan.setup,
             format!(
@@ -399,9 +380,17 @@ mod tests {
             workspace: Some(dir.path().to_path_buf()),
             ros_setup: None,
         };
-        let err = Plan::new("t", "s", &layout, &Defaults::default(), &overrides)
-            .unwrap_err()
-            .to_string();
+        let err = Plan::new(
+            "t",
+            "s",
+            &layout,
+            &Defaults::default(),
+            None,
+            &overrides,
+            Shell::Zsh,
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains(": b\nhint: build it"), "{err}");
     }
 
@@ -412,7 +401,67 @@ mod tests {
             workspace: None,
             ros_setup: Some("/nonexistent/setup.zsh".into()),
         };
-        let err = Plan::new("t", "s", &layout, &Defaults::default(), &overrides).unwrap_err();
-        assert!(err.to_string().contains("ROS setup file not found"));
+        let err = Plan::new(
+            "t",
+            "s",
+            &layout,
+            &Defaults::default(),
+            None,
+            &overrides,
+            Shell::Zsh,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("ROS setup not found"));
+    }
+
+    #[test]
+    fn env_supplies_ros_workspaces_and_vars() {
+        let dir = tempfile::tempdir().unwrap();
+        let ros = dir.path().join("ros");
+        let base = dir.path().join("base_ws");
+        let main = dir.path().join("main_ws");
+        for prefix in [&base, &main] {
+            std::fs::create_dir_all(prefix.join("install")).unwrap();
+            std::fs::write(prefix.join("install/setup.zsh"), "").unwrap();
+        }
+        std::fs::create_dir_all(&ros).unwrap();
+        std::fs::write(ros.join("setup.zsh"), "").unwrap();
+
+        let env = Env {
+            ros: Some(ros.display().to_string()),
+            workspaces: vec![base.display().to_string(), main.display().to_string()],
+            pre: vec!["echo env".into()],
+            vars: [("ROS_DOMAIN_ID".to_string(), "7".to_string())].into(),
+        };
+        let defaults = Defaults {
+            pre: vec!["echo defaults".into()],
+            // The env's ROS wins over the default one.
+            ros_setup: Some("/nonexistent".into()),
+            ..Defaults::default()
+        };
+        let layout = layout("[layouts.t]\npre = [\"echo layout\"]\npanes = [{}]");
+        let plan = Plan::new(
+            "t",
+            "s",
+            &layout,
+            &defaults,
+            Some(&env),
+            &Overrides::default(),
+            Shell::Zsh,
+        )
+        .unwrap();
+        assert_eq!(
+            plan.setup,
+            format!(
+                "echo defaults; echo env; echo layout; source {}; source {}; source {}; \
+                 export ROS_DOMAIN_ID=7; cd {}; clear",
+                ros.join("setup.zsh").display(),
+                base.join("install/setup.zsh").display(),
+                main.join("install/setup.zsh").display(),
+                main.display()
+            )
+        );
+        // With no workspace of its own, the layout runs in the env's last workspace.
+        assert_eq!(plan.start_dir.as_deref(), Some(main.as_path()));
     }
 }

@@ -22,7 +22,9 @@ pub struct Config {
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Defaults {
-    /// ROS setup file sourced in every pane, e.g. `/opt/ros/jazzy/setup.bash`.
+    /// Environment used by `up`, `shell` and `run` when none is named.
+    pub env: Option<String>,
+    /// ROS setup file (or install directory) sourced in every pane, e.g. `/opt/ros/jazzy`.
     pub ros_setup: Option<String>,
     /// Shell lines run in every pane before anything else.
     #[serde(default)]
@@ -34,6 +36,8 @@ pub struct Defaults {
 pub struct Layout {
     #[serde(default)]
     pub description: String,
+    /// Environment to load, instead of the default one.
+    pub env: Option<String>,
     /// Workspace to overlay and `cd` into.
     pub workspace: Option<String>,
     pub ros_setup: Option<String>,
@@ -96,6 +100,9 @@ impl Config {
         if other.defaults.ros_setup.is_some() {
             self.defaults.ros_setup = other.defaults.ros_setup;
         }
+        if other.defaults.env.is_some() {
+            self.defaults.env = other.defaults.env;
+        }
         if !other.defaults.pre.is_empty() {
             self.defaults.pre = other.defaults.pre;
         }
@@ -133,13 +140,17 @@ impl Layout {
     }
 }
 
-/// `$XDG_CONFIG_HOME/ruckus/config.toml`, else `~/.config/ruckus/config.toml`.
-pub fn default_path() -> Option<PathBuf> {
+/// `$XDG_CONFIG_HOME/ruckus`, else `~/.config/ruckus`.
+pub fn config_dir() -> Option<PathBuf> {
     let base = match std::env::var_os("XDG_CONFIG_HOME") {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir),
         _ => PathBuf::from(std::env::var_os("HOME")?).join(".config"),
     };
-    Some(base.join("ruckus").join("config.toml"))
+    Some(base.join("ruckus"))
+}
+
+pub fn default_path() -> Option<PathBuf> {
+    Some(config_dir()?.join("config.toml"))
 }
 
 /// Expand a leading `~` to `$HOME`.

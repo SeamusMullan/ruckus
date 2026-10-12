@@ -53,10 +53,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install tmux
+      - name: Install tmux and zsh
         run: |
-          if [ "$RUNNER_OS" = macOS ]; then brew install tmux; else sudo apt-get update && sudo apt-get install -y tmux; fi
+          if [ "$RUNNER_OS" = macOS ]; then brew install tmux; else sudo apt-get update && sudo apt-get install -y tmux zsh; fi
           tmux -V
+          zsh --version
       - run: cargo test --locked
 
   smoke:
@@ -95,6 +96,14 @@ jobs:
           $bin up smoke --detach
           test "$(tmux -L ruckus-smoke list-panes -t =ruckus-smoke | wc -l)" -eq 2
           $bin down smoke
+          # An environment over a fake ROS install, used by run.
+          mkdir -p "$RUNNER_TEMP/ros"
+          echo 'export ROS_DISTRO=smoke' > "$RUNNER_TEMP/ros/setup.bash"
+          SHELL=/bin/bash $bin env create smoke --ros "$RUNNER_TEMP/ros" --var ROS_DOMAIN_ID=9
+          $bin env ls
+          $bin env show smoke
+          test "$(SHELL=/bin/bash $bin run -e smoke -- printenv ROS_DISTRO)" = smoke
+          $bin env rm smoke
       - uses: actions/upload-artifact@v4
         with:
           name: ruckus-${{ matrix.os }}
