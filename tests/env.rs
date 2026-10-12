@@ -577,12 +577,25 @@ fn install_dry_run_resolves_from_robostack() {
         .success()
         .stderr(predicate::str::contains("ros-jazzy-ros-base"))
         .stderr(predicate::str::contains("with Python 3."));
+    // Lyrical is only on RoboStack's prefix.dev channels.
     sb.ruckus("/bin/bash")
-        .args(["install", "lyrical", "--dry-run"])
+        .args([
+            "install",
+            "lyrical",
+            "--variant",
+            "base",
+            "--no-dev",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("ros-lyrical-ros-base"));
+    sb.ruckus("/bin/bash")
+        .args(["install", "nosuchdistro", "--dry-run"])
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "RoboStack has no ready-built ROS 2 `lyrical`",
+            "RoboStack has no ready-built ROS 2 `nosuchdistro`",
         ));
 }
 

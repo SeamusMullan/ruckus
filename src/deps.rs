@@ -508,7 +508,7 @@ fn available(distro: &str, platform: Subdir, names: &[String]) -> Result<BTreeSe
         .build()?
         .block_on(async {
             let config = ChannelConfig::default_with_root_dir(std::env::current_dir()?);
-            let channel = Channel::from_str(format!("robostack-{distro}"), &config)?;
+            let channel = Channel::from_str(install::robostack_channel(distro), &config)?;
             let specs = names
                 .iter()
                 .filter_map(|name| MatchSpec::from_str(name, ParseStrictness::Lenient).ok())

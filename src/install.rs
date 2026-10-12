@@ -102,6 +102,12 @@ pub struct Meta {
     pub installed: u64,
 }
 
+/// RoboStack's channel for a distro. RoboStack publishes every current distro
+/// on prefix.dev; anaconda.org has only some of them (no Lyrical, for one).
+pub fn robostack_channel(distro: &str) -> String {
+    format!("https://prefix.dev/robostack-{distro}")
+}
+
 /// `$XDG_DATA_HOME/ruckus/distros`, else `~/.local/share/ruckus/distros`.
 pub fn distros_dir() -> Result<PathBuf> {
     let base = match std::env::var_os("XDG_DATA_HOME") {
@@ -254,7 +260,7 @@ async fn install_async(request: &Request) -> Result<PathBuf> {
     let dir = distros_dir()?.join(distro);
     let prefix = dir.join("prefix");
     let platform = Subdir::current().context("this platform has no conda packages")?;
-    let channel_names = [format!("robostack-{distro}"), "conda-forge".to_string()];
+    let channel_names = [robostack_channel(distro), "conda-forge".to_string()];
     let config = ChannelConfig::default_with_root_dir(std::env::current_dir()?);
     let channels = channel_names
         .iter()
@@ -386,7 +392,10 @@ async fn solve(
         .collect::<Result<Vec<_>, _>>()?;
     let distro = channels
         .first()
-        .and_then(|c| c.name.as_deref()?.strip_prefix("robostack-"))
+        .and_then(|c| {
+            let url = c.base_url.as_str().trim_end_matches('/');
+            url.rsplit('/').next()?.strip_prefix("robostack-")
+        })
         .unwrap_or("ROS")
         .to_string();
 
@@ -400,7 +409,7 @@ async fn solve(
     let repodata = repodata.map_err(|err| match err {
         GatewayError::SubdirNotFoundError(_) => anyhow::anyhow!(
             "RoboStack has no ready-built ROS 2 `{distro}` for {platform}\n\
-             hint: see https://robostack.github.io for the distros it has (e.g. jazzy, kilted)\n\
+             hint: see https://robostack.github.io for the distros it has (e.g. humble, jazzy, kilted, lyrical)\n\
              hint: for a ROS you built from source, point an environment at it instead:\n  \
              ruckus env create {distro} --ros ~/ros2_{distro}/install"
         ),

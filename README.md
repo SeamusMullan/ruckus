@@ -105,7 +105,8 @@ ruckus install jazzy --lock ruckus.lock   # exactly these packages, no resolving
 ```
 
 Packages come from [RoboStack](https://robostack.github.io), which builds ROS
-for conda on macOS (Apple Silicon and Intel), Linux and Windows. ruckus
+for conda on macOS (Apple Silicon and Intel), Linux and Windows: Humble,
+Jazzy, Kilted, Lyrical and Rolling, from its channels on prefix.dev. ruckus
 resolves and installs them itself through
 [rattler](https://github.com/conda/rattler), the library behind pixi, so
 neither conda nor pixi is needed. Each distro is self-contained in
@@ -117,8 +118,8 @@ are shared through the rattler cache (the same one pixi uses).
 environment, pass its name: `ruckus env create lab --ros jazzy --ws ~/lab_ws`.
 
 `ros2_jazzy` works as a name too. Installing a distro RoboStack does not build
-for your platform (such as Lyrical on macOS) says so; point an environment at
-your own source build instead.
+for your platform says so; point an environment at your own source build
+instead.
 
 ## Install a workspace's dependencies
 
@@ -219,8 +220,9 @@ tutorial) and `robot` (a URDF package with RViz). See
    used by `up`, `shell` and `run`. *Done.*
 3. **`ruckus install <distro>`**: ready-built ROS 2 from RoboStack, installed
    natively through the rattler library, no pixi or conda needed. *Done.*
-4. **Source builds**: an automated, repeatable source build for distros with
-   no ready-built packages on your platform (e.g. Lyrical on macOS).
+4. **Source builds**: an automated, repeatable source build for packages or
+   distros RoboStack does not build, against a conda-forge prefix that ruckus
+   sets up (so no Homebrew or system Python is involved).
 
 ## Develop
 

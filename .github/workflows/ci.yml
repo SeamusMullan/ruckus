@@ -115,28 +115,30 @@ jobs:
           path: target/release/ruckus
 
   install:
-    name: Install ROS 2 Jazzy end to end (${{ matrix.os }})
+    name: Install ROS 2 ${{ matrix.distro }} end to end (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        distro: [jazzy, lyrical]
     runs-on: ${{ matrix.os }}
     env:
       ROS_DOMAIN_ID: 42
+      DISTRO: ${{ matrix.distro }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --locked --release
-      - name: Install jazzy (ros-base and build tools)
-        run: target/release/ruckus install jazzy --variant base
+      - name: Install ${{ matrix.distro }} (ros-base and build tools)
+        run: target/release/ruckus install ${{ matrix.distro }} --variant base
       - name: Use it
         run: |
           set -eux
           bin=target/release/ruckus
           $bin distros
-          $bin env show jazzy
-          test "$(SHELL=/bin/bash $bin run -e jazzy -- printenv ROS_DISTRO)" = jazzy
+          $bin env show "$DISTRO"
+          test "$(SHELL=/bin/bash $bin run -e "$DISTRO" -- printenv ROS_DISTRO)" = "$DISTRO"
           # A message makes the round trip between two processes.
           cat > "$RUNNER_TEMP/roundtrip.sh" <<'SH'
           ros2 topic pub -r 5 /ci std_msgs/msg/String "{data: ruckus}" >/dev/null 2>&1 &
@@ -146,7 +148,7 @@ jobs:
           echo "$out"
           echo "$out" | grep -q "data: ruckus"
           SH
-          SHELL=/bin/bash $bin run -e jazzy -- bash "$RUNNER_TEMP/roundtrip.sh"
+          SHELL=/bin/bash $bin run -e "$DISTRO" -- bash "$RUNNER_TEMP/roundtrip.sh"
           # A Python package builds with colcon and runs.
           mkdir -p "$RUNNER_TEMP/ws/src"
           cat > "$RUNNER_TEMP/build.sh" <<'SH'
@@ -158,6 +160,6 @@ jobs:
           . install/setup.bash
           ros2 run py_hi hi
           SH
-          SHELL=/bin/bash $bin run -e jazzy -- bash "$RUNNER_TEMP/build.sh" "$RUNNER_TEMP/ws" | tee "$RUNNER_TEMP/build.out"
+          SHELL=/bin/bash $bin run -e "$DISTRO" -- bash "$RUNNER_TEMP/build.sh" "$RUNNER_TEMP/ws" | tee "$RUNNER_TEMP/build.out"
           grep -q "Hi from py_hi" "$RUNNER_TEMP/build.out"
-          $bin uninstall jazzy
+          $bin uninstall "$DISTRO"
