@@ -6,6 +6,8 @@
 # Settings, as environment variables:
 #   RUCKUS_VERSION      version to install, e.g. 0.1.0 [default: the latest release]
 #   RUCKUS_INSTALL_DIR  where to put the binary [default: ~/.local/bin]
+#   RUCKUS_INSTALL_TMUX 1 to install tmux if it is missing without asking, 0 never to
+#                       [default: ask, or skip when there is no terminal to ask on]
 #   RUCKUS_BASE_URL     where releases live [default: GitHub]; used by the tests
 set -eu
 
@@ -25,6 +27,52 @@ elif command -v wget >/dev/null 2>&1; then
 else
     die "needs curl or wget"
 fi
+
+# Layouts (ruckus up) need tmux. Offer to install it with the system's package manager.
+install_tmux() {
+    command -v tmux >/dev/null 2>&1 && return 0
+    # Running as root, sudo is not needed (and may not exist, as in containers).
+    sudo=sudo
+    [ "$(id -u)" = 0 ] && sudo=
+    if command -v brew >/dev/null 2>&1; then
+        pm=brew cmd="brew install tmux"
+    elif command -v apt-get >/dev/null 2>&1; then
+        pm=apt cmd="${sudo:+sudo }apt-get install -y tmux"
+    elif command -v dnf >/dev/null 2>&1; then
+        pm=dnf cmd="${sudo:+sudo }dnf install -y tmux"
+    elif command -v pacman >/dev/null 2>&1; then
+        pm=pacman cmd="${sudo:+sudo }pacman -S --noconfirm tmux"
+    else
+        say "note: layouts (ruckus up) need tmux; install it with your package manager"
+        return 0
+    fi
+    case "${RUCKUS_INSTALL_TMUX:-ask}" in
+        0) answer=n ;;
+        1) answer=y ;;
+        *)
+            # stdin is the script itself under `curl | sh`, so ask on the terminal.
+            if { : </dev/tty; } 2>/dev/null; then
+                printf 'ruckus-install: layouts need tmux, which is not installed. Run `%s` now? [Y/n] ' "$cmd" >&2
+                read -r answer </dev/tty || answer=n
+                [ -n "$answer" ] || answer=y
+            else
+                answer=n
+            fi
+            ;;
+    esac
+    case "$answer" in
+        [Yy]*) ;;
+        *) say "note: layouts (ruckus up) need tmux; install it with: $cmd"; return 0 ;;
+    esac
+    say "running: $cmd"
+    case $pm in
+        brew) brew install tmux ;;
+        # A fresh system or container may have no package lists yet.
+        apt) $sudo apt-get install -y tmux || { $sudo apt-get update && $sudo apt-get install -y tmux; } ;;
+        dnf) $sudo dnf install -y tmux ;;
+        pacman) $sudo pacman -S --noconfirm tmux ;;
+    esac && say "installed tmux" || say "warning: could not install tmux; run \`$cmd\` yourself"
+}
 
 case "$(uname -s)" in
     Darwin) os=apple-darwin ;;
@@ -84,8 +132,6 @@ case ":$PATH:" in
     *) say "note: $dir is not on your PATH; add this to your shell's rc file:"
        say "  export PATH=\"$dir:\$PATH\"" ;;
 esac
-if ! command -v tmux >/dev/null 2>&1; then
-    say "note: layouts (ruckus up) need tmux: brew install tmux, or sudo apt install tmux"
-fi
+install_tmux
 say "shell completions: see https://github.com/$repo#shell-completions"
 say "next: ruckus install jazzy"

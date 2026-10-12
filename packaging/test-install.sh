@@ -62,6 +62,7 @@ RUCKUS_BASE_URL=$base RUCKUS_INSTALL_DIR=$work/bin RUCKUS_VERSION=v$version sh "
 test "$("$work/bin/ruckus" --version)" = "ruckus $version"
 
 echo "== a corrupted archive is refused"
+cp "$release/SHA256SUMS" "$work/SHA256SUMS.good"
 printf '%s  %s\n' 0000000000000000000000000000000000000000000000000000000000000000 "$name.tar.gz" > "$release/SHA256SUMS"
 if RUCKUS_BASE_URL=$base RUCKUS_INSTALL_DIR=$work/bad sh "$root/install.sh" 2> "$work/err"; then
     echo "install.sh accepted a bad checksum" >&2
@@ -69,6 +70,7 @@ if RUCKUS_BASE_URL=$base RUCKUS_INSTALL_DIR=$work/bad sh "$root/install.sh" 2> "
 fi
 grep -q "checksum mismatch" "$work/err"
 test ! -e "$work/bad/ruckus"
+cp "$work/SHA256SUMS.good" "$release/SHA256SUMS"
 
 echo "== a missing version is reported"
 if RUCKUS_BASE_URL=$base RUCKUS_INSTALL_DIR=$work/bad RUCKUS_VERSION=9.9.9 sh "$root/install.sh" 2> "$work/err"; then
@@ -76,5 +78,47 @@ if RUCKUS_BASE_URL=$base RUCKUS_INSTALL_DIR=$work/bad RUCKUS_VERSION=9.9.9 sh "$
     exit 1
 fi
 grep -q "no release archive" "$work/err"
+
+# A PATH with the tools install.sh uses but no tmux, plus a fake package manager.
+sandbox() {
+    sb=$work/path-$1
+    mkdir -p "$sb"
+    for tool in uname curl sed mktemp rm awk sha256sum shasum perl tar gzip mkdir cp chmod mv id sysctl cat touch; do
+        real=$(command -v "$tool" 2>/dev/null) && ln -sf "$real" "$sb/$tool"
+    done
+    printf '#!/bin/sh\nexec "$@"\n' > "$sb/sudo"
+    chmod +x "$sb/sudo"
+    echo "$sb"
+}
+fake() { # fake NAME SANDBOX: records its arguments; `apt-get install` fails until `update`
+    cat > "$2/$1" <<SH
+#!/bin/sh
+echo "$1 \$*" >> "$work/calls"
+if [ "$1 \$1" = "apt-get install" ] && [ ! -e "$work/updated" ]; then exit 100; fi
+if [ "\$1" = update ]; then touch "$work/updated"; fi
+SH
+    chmod +x "$2/$1"
+}
+
+echo "== tmux missing, apt: installs it, updating package lists when needed"
+sb=$(sandbox apt); fake apt-get "$sb"
+PATH=$sb RUCKUS_INSTALL_TMUX=1 RUCKUS_BASE_URL=$base RUCKUS_INSTALL_DIR=$work/bin RUCKUS_VERSION=$version \
+    /bin/sh "$root/install.sh" 2> "$work/err" || { cat "$work/err"; exit 1; }
+printf 'apt-get install -y tmux\napt-get update\napt-get install -y tmux\n' | diff - "$work/calls" || { cat "$work/err"; exit 1; }
+grep -q "installed tmux" "$work/err"
+
+echo "== tmux missing, brew"
+rm -f "$work/calls"
+sb=$(sandbox brew); fake brew "$sb"
+PATH=$sb RUCKUS_INSTALL_TMUX=1 RUCKUS_BASE_URL=$base RUCKUS_INSTALL_DIR=$work/bin RUCKUS_VERSION=$version \
+    /bin/sh "$root/install.sh" 2> "$work/err" || { cat "$work/err"; exit 1; }
+test "$(cat "$work/calls")" = "brew install tmux"
+
+echo "== tmux missing, told not to: only a note"
+rm -f "$work/calls"
+PATH=$sb RUCKUS_INSTALL_TMUX=0 RUCKUS_BASE_URL=$base RUCKUS_INSTALL_DIR=$work/bin RUCKUS_VERSION=$version \
+    /bin/sh "$root/install.sh" 2> "$work/err" || { cat "$work/err"; exit 1; }
+test ! -e "$work/calls"
+grep -q "install it with: brew install tmux" "$work/err"
 
 echo "install.sh: all checks passed"

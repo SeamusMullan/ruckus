@@ -47,14 +47,16 @@ curl -fsSL https://raw.githubusercontent.com/SeamusMullan/ruckus/main/install.sh
 ```
 
 The script downloads the release binary for your system to `~/.local/bin` and
-checks its SHA256. Or, with Homebrew or Rust:
+checks its SHA256. If tmux is missing, it offers to install it with brew or
+apt. Or, with Homebrew or Rust:
 
 ```sh
 brew install SeamusMullan/ruckus/ruckus
 cargo install --git https://github.com/SeamusMullan/ruckus
 ```
 
-Layouts also need tmux: `brew install tmux` or `sudo apt install tmux`.
+With cargo, install tmux yourself for layouts: `brew install tmux` or
+`sudo apt install tmux`.
 
 ## Quick start
 
