@@ -19,8 +19,18 @@ $ ruckus up turtle
 └──────────────────────────┴──────────────────────────┘
 ```
 
-> **Status:** early. Layouts (`ruckus up`) and environments (`ruckus env`,
-> `shell`, `run`) work today. Installing ROS 2 itself is next; see the
+It can also install ROS 2 for you, ready-built, on macOS and Linux:
+
+```console
+$ ruckus install jazzy
+ros-jazzy-desktop 0.11.0 with Python 3.12.15: 702 packages, 871 MB to download (less if cached)
+installed ROS 2 jazzy in ~/.local/share/ruckus/distros/jazzy
+created environment `jazzy`
+$ ruckus up turtle -e jazzy
+```
+
+> **Status:** early. Layouts, environments and installs work today. Source
+> builds for distros with no ready-built packages are next; see the
 > [roadmap](#roadmap).
 
 ## Install
@@ -45,6 +55,33 @@ ruckus down turtle           # stop it
 
 Inside the session: click a pane (or Ctrl+B, arrow) to move, Ctrl+B z to zoom
 a pane, Ctrl+B d to leave it running.
+
+## Install ROS 2
+
+```sh
+ruckus install jazzy                 # desktop: RViz, turtlesim, demos, plus colcon and compilers
+ruckus install kilted --variant base # no GUI tools
+ruckus install jazzy --add ros-jazzy-navigation2   # extra packages; rerun to add more or update
+ruckus install jazzy --dry-run       # what it would install, and the download size
+ruckus distros                       # what is installed
+ruckus uninstall jazzy
+```
+
+Packages come from [RoboStack](https://robostack.github.io), which builds ROS
+for conda on macOS (Apple Silicon and Intel), Linux and Windows. ruckus
+resolves and installs them itself through
+[rattler](https://github.com/conda/rattler), the library behind pixi, so
+neither conda nor pixi is needed. Each distro is self-contained in
+`~/.local/share/ruckus/distros/<distro>`, with its own Python, and downloads
+are shared through the rattler cache (the same one pixi uses).
+
+`install` also creates an environment named after the distro, so
+`ruckus shell jazzy` works straight away. To use an installed distro in another
+environment, pass its name: `ruckus env create lab --ros jazzy --ws ~/lab_ws`.
+
+`ros2_jazzy` works as a name too. Installing a distro RoboStack does not build
+for your platform (such as Lyrical on macOS) says so; point an environment at
+your own source build instead.
 
 ## Environments
 
@@ -74,6 +111,10 @@ without `-e`.
 
 `ruckus shell` runs your normal rc files first (`.zshrc` or `.bashrc`), so your
 prompt and aliases stay, and sets `RUCKUS_ENV` to the environment's name.
+If your rc file already loads a ROS, ruckus unloads it before loading the
+environment's, so two distros never mix. Settings such as `ROS_DOMAIN_ID`
+stay. Distros from `ruckus install` also get their own colcon settings
+(`COLCON_HOME`), so `~/.colcon` tuned for another ROS does not leak in.
 ROS is always loaded by sourcing its setup files inside the shell. On macOS
 this matters: System Integrity Protection strips the `DYLD_*` variables ROS
 needs from any environment passed to `/bin/zsh` or `/bin/bash`.
@@ -124,7 +165,7 @@ tutorial) and `robot` (a URDF package with RViz). See
 2. **`ruckus env`**: named environments, each a ROS install plus workspaces,
    used by `up`, `shell` and `run`. *Done.*
 3. **`ruckus install <distro>`**: ready-built ROS 2 from RoboStack, installed
-   natively through the rattler library, no pixi or conda needed.
+   natively through the rattler library, no pixi or conda needed. *Done.*
 4. **Source builds**: an automated, repeatable source build for distros with
    no ready-built packages on your platform (e.g. Lyrical on macOS).
 
@@ -135,8 +176,13 @@ cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
 The tmux tests run on a private server (`RUCKUS_TMUX_SOCKET`), so they never
-touch your own sessions. CI runs format, lint, tests and a smoke test of the
-release build on Linux and macOS.
+touch your own sessions. Tests that need the network (resolving real RoboStack
+packages) run when `RUCKUS_NETWORK_TESTS=1` is set.
+
+CI runs format, lint, tests and a smoke test of the release build on Linux and
+macOS, plus a real `ruckus install jazzy` that passes a message between two
+nodes and builds a package with colcon. It also runs weekly, to notice when
+upstream packages change.
 
 ## License
 

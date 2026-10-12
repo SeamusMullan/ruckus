@@ -273,6 +273,15 @@ impl Recorder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The first setup line whenever a ROS is loaded: unload the shell's old one.
+    fn clean_line() -> String {
+        let exe = std::env::current_exe().unwrap();
+        format!(
+            "eval \"$({} internal clean-env)\"",
+            quote(&exe.display().to_string())
+        )
+    }
     use crate::config::Config;
 
     fn layout(text: &str) -> Layout {
@@ -356,7 +365,8 @@ mod tests {
         assert_eq!(
             plan.setup,
             format!(
-                "export A=1; source {}; source {}; cd {}; clear",
+                "{}; export A=1; source {}; source {}; cd {}; clear",
+                clean_line(),
                 ros.display(),
                 ws.join("install/setup.bash").display(),
                 ws.display()
@@ -453,8 +463,9 @@ mod tests {
         assert_eq!(
             plan.setup,
             format!(
-                "echo defaults; echo env; echo layout; source {}; source {}; source {}; \
+                "{}; echo defaults; echo env; echo layout; source {}; source {}; source {}; \
                  export ROS_DOMAIN_ID=7; cd {}; clear",
+                clean_line(),
                 ros.join("setup.zsh").display(),
                 base.join("install/setup.zsh").display(),
                 main.join("install/setup.zsh").display(),

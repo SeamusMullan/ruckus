@@ -1,5 +1,7 @@
+mod clean;
 mod config;
 mod env;
+mod install;
 mod shell;
 mod tmux;
 
@@ -11,6 +13,7 @@ use clap::{Args, Parser, Subcommand};
 
 use config::{Config, expand_tilde};
 use env::Env;
+use install::Variant;
 use shell::{Activation, Shell};
 use tmux::{Overrides, Plan, RealTmux, Recorder, Tmux, quote};
 
@@ -28,6 +31,9 @@ struct Cli {
 
 const AFTER_HELP: &str = "\
 Examples:
+  ruckus install jazzy          ready-built ROS 2 Jazzy, plus an environment for it
+  ruckus shell jazzy            a shell with it loaded
+
   ruckus ls                     list layouts
   ruckus up turtle              start turtlesim, teleop and echoes in tmux
   ruckus up robot --dry-run     print the tmux commands instead of running them
@@ -62,6 +68,33 @@ enum Command {
         /// Environment [default: `env` in [defaults]]
         env: Option<String>,
     },
+    /// Install a ready-built ROS 2 distro (from RoboStack), with an environment for it
+    Install {
+        /// Distro, e.g. jazzy or kilted (ros2_jazzy works too)
+        distro: String,
+        /// Which ROS packages
+        #[arg(long, value_enum, default_value_t = Variant::Desktop)]
+        variant: Variant,
+        /// Extra conda package to install, e.g. ros-jazzy-turtlesim; repeat for more
+        #[arg(long = "add", value_name = "PACKAGE")]
+        extra: Vec<String>,
+        /// Leave out colcon, cmake and compilers for building workspaces
+        #[arg(long)]
+        no_dev: bool,
+        /// Do not create an environment named after the distro
+        #[arg(long)]
+        no_env: bool,
+        /// Resolve and show what would be installed, without installing
+        #[arg(long, short = 'n')]
+        dry_run: bool,
+    },
+    /// Delete a distro installed with `ruckus install`
+    Uninstall { distro: String },
+    /// List distros installed with `ruckus install`
+    Distros,
+    /// Used by ruckus inside the shells it starts
+    #[command(subcommand, hide = true)]
+    Internal(InternalCommand),
     /// Run one command with an environment loaded
     Run {
         /// Environment [default: `env` in [defaults]]
@@ -74,11 +107,17 @@ enum Command {
 }
 
 #[derive(Subcommand)]
+enum InternalCommand {
+    /// Print shell lines that unload the ROS this shell already has
+    CleanEnv,
+}
+
+#[derive(Subcommand)]
 enum EnvCommand {
     /// Create an environment
     Create {
         name: String,
-        /// ROS install directory, or its setup file
+        /// ROS install directory, its setup file, or a distro from `ruckus install`
         #[arg(long)]
         ros: PathBuf,
         /// Workspace to overlay; repeat for more, in order
@@ -136,8 +175,67 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<()> {
+    if let Command::Internal(InternalCommand::CleanEnv) = cli.command {
+        // Runs in every shell ruckus starts, so it must not depend on the config.
+        let script = clean::script(&std::env::vars().collect());
+        if !script.is_empty() {
+            println!("{script}");
+        }
+        return Ok(());
+    }
     let config = Config::load(cli.config.as_deref())?;
     match cli.command {
+        Command::Internal(_) => unreachable!("handled above"),
+        Command::Install {
+            distro,
+            variant,
+            extra,
+            no_dev,
+            no_env,
+            dry_run,
+        } => {
+            let request = install::Request {
+                distro: install::normalize(&distro)?,
+                variant,
+                extra,
+                dev: !no_dev,
+                dry_run,
+            };
+            install_command(&request, no_env)
+        }
+        Command::Uninstall { distro } => {
+            let distro = install::normalize(&distro)?;
+            let dir = install::uninstall(&distro)?;
+            println!("removed {}", dir.display());
+            for (name, env) in env::list()? {
+                if env.ros_path().as_deref() == Some(dir.as_path()) {
+                    eprintln!(
+                        "note: environment `{name}` used it; remove it with `ruckus env rm {name}`"
+                    );
+                }
+            }
+            Ok(())
+        }
+        Command::Distros => {
+            let distros = install::list()?;
+            if distros.is_empty() {
+                println!("no distros installed yet; try `ruckus install jazzy`");
+                return Ok(());
+            }
+            let width = distros
+                .iter()
+                .map(|(name, _)| name.len())
+                .max()
+                .unwrap_or(0);
+            for (name, meta) in distros {
+                println!(
+                    "{name:width$}  {:?} ({} packages, {})",
+                    meta.variant, meta.packages, meta.platform
+                );
+            }
+            println!("in {}", install::distros_dir()?.display());
+            Ok(())
+        }
         Command::Up(args) => up(&config, args),
         Command::Env(command) => env_command(&config, command),
         Command::Shell { env } => {
@@ -284,6 +382,55 @@ fn activation(config: &Config, name: Option<String>) -> Result<(String, Activati
     Ok((name, activation))
 }
 
+fn install_command(request: &install::Request, no_env: bool) -> Result<()> {
+    let distro = &request.distro;
+    let dir = install::install(request)?;
+    if request.dry_run {
+        return Ok(());
+    }
+    println!("installed ROS 2 {distro} in {}", dir.display());
+    if no_env {
+        println!("use it with: ruckus env create NAME --ros {distro}");
+        return Ok(());
+    }
+    match Env::load(distro) {
+        Ok(env) if env.ros_path().as_deref() == Some(dir.as_path()) => {}
+        Ok(_) => {
+            eprintln!(
+                "note: an environment named `{distro}` already exists and uses another ROS; left as is"
+            );
+            println!("use it with: ruckus env create NAME --ros {distro}");
+            return Ok(());
+        }
+        Err(_) => {
+            Env {
+                ros: Some(env::store_path(&dir)?),
+                ..Env::default()
+            }
+            .save(distro, false)?;
+            println!("created environment `{distro}`");
+        }
+    }
+    println!("use it with: ruckus shell {distro}");
+    Ok(())
+}
+
+/// A `--ros` value: a path, or the name of a distro from `ruckus install`.
+fn ros_arg(ros: &Path) -> Result<PathBuf> {
+    let text = ros.to_string_lossy();
+    let path = expand_tilde(&text);
+    if path.exists() || text.contains('/') {
+        return Ok(path);
+    }
+    match install::normalize(&text)
+        .ok()
+        .and_then(|d| install::installed(&d))
+    {
+        Some(dir) => Ok(dir),
+        None => bail!("{text} is neither a path nor an installed distro (see `ruckus distros`)"),
+    }
+}
+
 fn env_command(config: &Config, command: EnvCommand) -> Result<()> {
     match command {
         EnvCommand::Create {
@@ -294,7 +441,8 @@ fn env_command(config: &Config, command: EnvCommand) -> Result<()> {
             pre,
             force,
         } => {
-            let ros_abs = expand_tilde(&ros.to_string_lossy());
+            let ros = ros_arg(&ros)?;
+            let ros_abs = ros.clone();
             if !ros_abs.is_file() && !has_setup_file(&ros_abs) {
                 bail!(
                     "{} is not a ROS install: expected a setup file, or a directory with setup.zsh, setup.bash or setup.sh",

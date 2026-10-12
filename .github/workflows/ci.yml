@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Weekly, to notice when RoboStack or conda-forge changes break installs.
+  schedule:
+    - cron: "17 5 * * 1"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -49,6 +52,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       TERM: xterm-256color
+      RUCKUS_NETWORK_TESTS: 1
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -108,3 +112,51 @@ jobs:
         with:
           name: ruckus-${{ matrix.os }}
           path: target/release/ruckus
+
+  install:
+    name: Install ROS 2 Jazzy end to end (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      ROS_DOMAIN_ID: 42
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked --release
+      - name: Install jazzy (ros-base and build tools)
+        run: target/release/ruckus install jazzy --variant base
+      - name: Use it
+        run: |
+          set -eux
+          bin=target/release/ruckus
+          $bin distros
+          $bin env show jazzy
+          test "$(SHELL=/bin/bash $bin run -e jazzy -- printenv ROS_DISTRO)" = jazzy
+          # A message makes the round trip between two processes.
+          cat > "$RUNNER_TEMP/roundtrip.sh" <<'SH'
+          ros2 topic pub -r 5 /ci std_msgs/msg/String "{data: ruckus}" >/dev/null 2>&1 &
+          pid=$!
+          out=$(ros2 topic echo /ci std_msgs/msg/String --once --timeout 60)
+          kill $pid
+          echo "$out"
+          echo "$out" | grep -q "data: ruckus"
+          SH
+          SHELL=/bin/bash $bin run -e jazzy -- bash "$RUNNER_TEMP/roundtrip.sh"
+          # A Python package builds with colcon and runs.
+          mkdir -p "$RUNNER_TEMP/ws/src"
+          cat > "$RUNNER_TEMP/build.sh" <<'SH'
+          set -e
+          cd "$1/src"
+          ros2 pkg create --build-type ament_python --node-name hi py_hi
+          cd "$1"
+          colcon build
+          . install/setup.bash
+          ros2 run py_hi hi
+          SH
+          SHELL=/bin/bash $bin run -e jazzy -- bash "$RUNNER_TEMP/build.sh" "$RUNNER_TEMP/ws" | tee "$RUNNER_TEMP/build.out"
+          grep -q "Hi from py_hi" "$RUNNER_TEMP/build.out"
+          $bin uninstall jazzy

@@ -41,6 +41,10 @@ impl Sandbox {
         cmd.env("HOME", self.home.path())
             .env("XDG_CONFIG_HOME", self.path(".config"))
             .env("XDG_CACHE_HOME", self.path(".cache"))
+            .env("XDG_DATA_HOME", self.path(".local/share"))
+            .env_remove("AMENT_PREFIX_PATH")
+            .env_remove("COLCON_PREFIX_PATH")
+            .env_remove("PYTHONPATH")
             .env("SHELL", shell)
             .env_remove("ZDOTDIR")
             .env_remove("RUCKUS_CONFIG")
@@ -302,4 +306,131 @@ fn up_uses_env() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("available: lab"));
+}
+
+#[test]
+fn loading_ros_unloads_the_shells_old_ros() {
+    let sb = Sandbox::new();
+    sb.create("lab");
+    let old = sb.path("old_ws/install/oldpkg");
+    std::fs::create_dir_all(old.join("bin")).unwrap();
+    let path = format!(
+        "{}:{}",
+        old.join("bin").display(),
+        std::env::var("PATH").unwrap()
+    );
+    for shell in shells() {
+        sb.ruckus(&shell)
+            .env("ROS_DISTRO", "old")
+            .env("ROS_VERSION", "2")
+            .env("AMENT_PREFIX_PATH", &old)
+            .env("PYTHONPATH", sb.path("old_ws/build/oldpkg"))
+            .env("PATH", &path)
+            .args(["run", "-e", "lab", "--", "sh", "-c"])
+            .arg("echo $ROS_DISTRO ${ROS_VERSION:-unset} ${PYTHONPATH:-unset}; echo $PATH")
+            .assert()
+            .success()
+            .stdout(predicate::str::starts_with("fake unset unset\n"))
+            .stdout(predicate::str::contains("old_ws").not());
+    }
+}
+
+#[test]
+fn installed_distros_are_listed_named_and_removed() {
+    let sb = Sandbox::new();
+    sb.ruckus("/bin/bash")
+        .arg("distros")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no distros installed yet"));
+
+    // What `ruckus install` leaves behind, without the 1 GB download.
+    let dir = sb.path(".local/share/ruckus/distros/fakey");
+    std::fs::create_dir_all(dir.join("prefix/conda-meta")).unwrap();
+    std::fs::write(dir.join("setup.bash"), "export ROS_DISTRO=fakey\n").unwrap();
+    std::fs::write(
+        dir.join("ruckus.toml"),
+        "distro = \"fakey\"\nvariant = \"base\"\nspecs = [\"ros-fakey-ros-base\"]\n\
+         channels = [\"robostack-fakey\"]\nplatform = \"osx-arm64\"\npackages = 3\ninstalled = 0\n",
+    )
+    .unwrap();
+
+    sb.ruckus("/bin/bash")
+        .arg("distros")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "fakey  Base (3 packages, osx-arm64)",
+        ));
+
+    // `--ros` takes an installed distro by name; `ros2_` is accepted as in `ruckus install`.
+    sb.ruckus("/bin/bash")
+        .args(["env", "create", "f", "--ros", "ros2_fakey"])
+        .assert()
+        .success();
+    sb.ruckus("/bin/bash")
+        .args(["run", "-e", "f", "--", "printenv", "ROS_DISTRO"])
+        .assert()
+        .success()
+        .stdout("fakey\n");
+    sb.ruckus("/bin/bash")
+        .args(["env", "create", "g", "--ros", "nosuchdistro"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "neither a path nor an installed distro",
+        ));
+
+    sb.ruckus("/bin/bash")
+        .args(["uninstall", "fakey"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("environment `f` used it"));
+    assert!(!dir.exists());
+    sb.ruckus("/bin/bash")
+        .args(["uninstall", "fakey"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not installed"));
+}
+
+#[test]
+fn install_rejects_bad_names_before_any_download() {
+    let sb = Sandbox::new();
+    sb.ruckus("/bin/bash")
+        .args(["install", "jazzy2"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not a ROS distro name"));
+}
+
+/// Resolves real RoboStack package lists (no install). Needs the network, so
+/// it runs only when RUCKUS_NETWORK_TESTS is set, as it is in CI.
+#[test]
+fn install_dry_run_resolves_from_robostack() {
+    if std::env::var_os("RUCKUS_NETWORK_TESTS").is_none() {
+        eprintln!("skipping: set RUCKUS_NETWORK_TESTS=1 to run");
+        return;
+    }
+    let sb = Sandbox::new();
+    sb.ruckus("/bin/bash")
+        .args([
+            "install",
+            "jazzy",
+            "--variant",
+            "base",
+            "--no-dev",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("ros-jazzy-ros-base"))
+        .stderr(predicate::str::contains("with Python 3."));
+    sb.ruckus("/bin/bash")
+        .args(["install", "lyrical", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "RoboStack has no ready-built ROS 2 `lyrical`",
+        ));
 }

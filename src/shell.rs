@@ -61,6 +61,8 @@ impl Shell {
 /// What to run in a shell to load ROS, workspaces and settings.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Activation {
+    /// The ruckus binary, run first to unload any ROS the shell already has.
+    pub clean: Option<PathBuf>,
     pub pre: Vec<String>,
     pub sources: Vec<PathBuf>,
     pub vars: BTreeMap<String, String>,
@@ -70,7 +72,8 @@ impl Activation {
     /// Resolve a ROS install and workspaces into the setup files to source.
     ///
     /// `ros` is a setup file or an install directory holding `setup.<ext>`.
-    /// Workspaces that are not built yet are skipped.
+    /// Workspaces that are not built yet are skipped. Loading a ROS first
+    /// unloads any other ROS the shell has, e.g. from the user's rc file.
     pub fn resolve(
         ros: Option<&Path>,
         workspaces: &[PathBuf],
@@ -85,8 +88,10 @@ impl Activation {
             .and_then(|ext| ext.to_str())
             .unwrap_or(shell.ext());
         let mut sources = vec![];
+        let mut clean = None;
         if let Some(ros) = ros {
             sources.push(setup_file(ros, ext)?);
+            clean = Some(std::env::current_exe().context("cannot find the ruckus binary")?);
         }
         for workspace in workspaces {
             let overlay = workspace.join("install").join(format!("setup.{ext}"));
@@ -94,12 +99,25 @@ impl Activation {
                 sources.push(overlay);
             }
         }
-        Ok(Self { pre, sources, vars })
+        Ok(Self {
+            clean,
+            pre,
+            sources,
+            vars,
+        })
     }
 
-    /// Shell lines, in order: `pre`, then `source` each file, then `export` the variables.
+    /// Shell lines, in order: unload the old ROS, `pre`, then `source` each
+    /// file, then `export` the variables.
     pub fn lines(&self) -> Vec<String> {
-        let mut lines = self.pre.clone();
+        let mut lines = vec![];
+        if let Some(ruckus) = &self.clean {
+            lines.push(format!(
+                "eval \"$({} internal clean-env)\"",
+                quote(&ruckus.display().to_string())
+            ));
+        }
+        lines.extend(self.pre.iter().cloned());
         for source in &self.sources {
             lines.push(format!("source {}", quote(&source.display().to_string())));
         }
@@ -280,8 +298,9 @@ mod tests {
     }
 
     #[test]
-    fn lines_are_pre_then_sources_then_vars() {
+    fn lines_are_clean_pre_sources_then_vars() {
         let activation = Activation {
+            clean: Some("/bin/ruckus".into()),
             pre: vec!["export PATH=\"$HOME/bin:$PATH\"".into()],
             sources: vec!["/ros/my setup.zsh".into()],
             vars: BTreeMap::from([("ROS_DOMAIN_ID".into(), "7".into())]),
@@ -289,6 +308,7 @@ mod tests {
         assert_eq!(
             activation.lines(),
             [
+                "eval \"$(/bin/ruckus internal clean-env)\"",
                 "export PATH=\"$HOME/bin:$PATH\"",
                 "source '/ros/my setup.zsh'",
                 "export ROS_DOMAIN_ID=7",

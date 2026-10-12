@@ -132,6 +132,16 @@ fn up_and_down_with_real_tmux() {
     }
     let home = tempfile::tempdir().unwrap();
     let socket = format!("ruckus-test-{}", std::process::id());
+    // Stop the private server even when an assertion fails part way.
+    struct KillServer<'a>(&'a str);
+    impl Drop for KillServer<'_> {
+        fn drop(&mut self) {
+            let _ = Command::new("tmux")
+                .args(["-L", self.0, "kill-server"])
+                .output();
+        }
+    }
+    let _server = KillServer(&socket);
     std::fs::create_dir(home.path().join("ruckus")).unwrap();
     std::fs::write(
         home.path().join("ruckus/config.toml"),
@@ -223,6 +233,4 @@ fn up_and_down_with_real_tmux() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("no session named ruckus-demo"));
-
-    tmux(&["kill-server"]);
 }
