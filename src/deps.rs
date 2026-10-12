@@ -30,7 +30,7 @@ pub struct Args {
 }
 
 pub fn run(config: &Config, args: Args) -> Result<()> {
-    let (distro, meta) = target(config, args.env, args.distro)?;
+    let (distro, _) = target(config, args.env, args.distro)?;
     let dir = install::installed(&distro).expect("target returns installed distros");
     let workspace = match args.workspace {
         Some(path) => expand_tilde(&path.to_string_lossy()),
@@ -88,13 +88,12 @@ pub fn run(config: &Config, args: Args) -> Result<()> {
         println!("dry run; nothing installed");
         return Ok(());
     }
-    // The installed variant and dev tools are kept, so only the new packages change.
+    // A re-install keeps the recorded variant, dev tools and earlier packages,
+    // and their versions, so only the new packages change.
     let request = install::Request {
         distro: distro.clone(),
-        variant: meta.variant,
         extra: plan.missing.iter().cloned().collect(),
-        dev: meta.specs.iter().any(|s| s == "colcon-common-extensions"),
-        dry_run: false,
+        ..Default::default()
     };
     install::install(&request)?;
     println!("installed {} packages into {distro}", plan.missing.len());
