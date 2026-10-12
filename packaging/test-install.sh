@@ -50,7 +50,13 @@ server.serve_forever()
 PY
 python3 "$work/serve.py" "$work" "$version" > "$work/port" &
 server=$!
-for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$work/port" ] && break; sleep 0.5; done
+# Python can take a while to start on a cold CI runner.
+tries=0
+until [ -s "$work/port" ]; do
+    tries=$((tries + 1))
+    [ "$tries" -le 60 ] || { echo "the test server did not start" >&2; exit 1; }
+    sleep 0.5
+done
 base=http://127.0.0.1:$(cat "$work/port")/releases
 
 echo "== latest release"
