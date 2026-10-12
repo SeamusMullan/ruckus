@@ -23,14 +23,11 @@ panes = [
   { run = "ros2 topic list", delay = 3 },
 ]
 
-[layouts.robot]
-description = "urdf_robot launch file with RViz and a /joint_states echo"
-workspace = "~/polar_ws"
-requires = ["urdf_robot"]
-hint = "Create the urdf_robot package with a launch/robot_launch.py, then run `colcon build` in the workspace."
+[layouts.urdf]
+description = "urdf_tutorial's robot in RViz, with joint sliders and a /joint_states echo"
 panes = [
-  { run = "ros2 launch urdf_robot robot_launch.py" },
-  { run = "if [ -f src/urdf_robot/urdf/urdf.rviz ]; then rviz2 -d src/urdf_robot/urdf/urdf.rviz; else rviz2; fi", delay = 2 },
-  { run = "ros2 topic echo /joint_states sensor_msgs/msg/JointState", delay = 3 },
-  { run = "ros2 node list", delay = 3 },
+  { run = "ros2 launch urdf_tutorial display.launch.py model:=urdf/08-macroed.urdf.xacro" },
+  { run = "ros2 topic echo /joint_states sensor_msgs/msg/JointState", delay = 5 },
+  { run = "ros2 node list", delay = 5 },
+  { focus = true },
 ]

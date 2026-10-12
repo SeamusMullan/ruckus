@@ -159,7 +159,7 @@ mod tests {
     fn round_trips_through_toml() {
         let env = Env {
             ros: Some("~/ros2_lyrical/install".into()),
-            workspaces: vec!["~/polar_ws".into()],
+            workspaces: vec!["~/lab_ws".into()],
             pre: vec![],
             vars: BTreeMap::from([("ROS_DOMAIN_ID".into(), "7".into())]),
         };

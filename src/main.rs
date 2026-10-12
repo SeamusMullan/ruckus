@@ -40,13 +40,13 @@ Examples:
 
   ruckus ls                     list layouts
   ruckus up turtle              start turtlesim, teleop and echoes in tmux
-  ruckus up robot --dry-run     print the tmux commands instead of running them
+  ruckus up urdf --dry-run      print the tmux commands instead of running them
   ruckus down turtle            stop the session
 
-  ruckus env create cs422 --ros ~/ros2_lyrical/install --ws ~/polar_ws
-  ruckus shell cs422            a shell with that ROS and workspace loaded
-  ruckus run -e cs422 -- ros2 topic list
-  ruckus up robot -e cs422      a layout in that environment";
+  ruckus env create lab --ros jazzy --ws ~/lab_ws
+  ruckus shell lab              a shell with that ROS and workspace loaded
+  ruckus run -e lab -- ros2 topic list
+  ruckus up urdf -e lab         a layout in that environment";
 
 #[derive(Subcommand)]
 enum Command {

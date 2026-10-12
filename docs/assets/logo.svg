@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="ruckus">
+  <!-- A turtle seen from above, its shell tiled like tmux panes. -->
+  <g fill="#2f9e6e">
+    <ellipse cx="52" cy="76" rx="26" ry="15" transform="rotate(-38 52 76)"/>
+    <ellipse cx="204" cy="76" rx="26" ry="15" transform="rotate(38 204 76)"/>
+    <ellipse cx="52" cy="204" rx="26" ry="15" transform="rotate(38 52 204)"/>
+    <ellipse cx="204" cy="204" rx="26" ry="15" transform="rotate(-38 204 204)"/>
+    <path d="M118 214 L138 214 L128 238 Z"/>
+    <circle cx="128" cy="44" r="25"/>
+  </g>
+  <circle cx="119" cy="38" r="4" fill="#10241b"/>
+  <circle cx="137" cy="38" r="4" fill="#10241b"/>
+  <rect x="50" y="62" width="156" height="156" rx="40" fill="#10241b" stroke="#2f9e6e" stroke-width="4"/>
+  <rect x="64" y="76" width="60" height="60" rx="16" fill="#4ade80"/>
+  <rect x="132" y="76" width="60" height="60" rx="16" fill="#2f9e6e"/>
+  <rect x="64" y="144" width="60" height="60" rx="16" fill="#237a55"/>
+  <rect x="132" y="144" width="60" height="60" rx="16" fill="#2f9e6e"/>
+  <path d="M80 94 L96 106 L80 118" fill="none" stroke="#10241b" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M100 118 L111 118" stroke="#10241b" stroke-width="7" stroke-linecap="round"/>
+</svg>

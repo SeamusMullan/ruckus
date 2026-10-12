@@ -38,7 +38,7 @@ fn lists_builtin_layouts() {
         .success()
         .stdout(predicate::str::contains("turtle"))
         .stdout(predicate::str::contains("pubsub"))
-        .stdout(predicate::str::contains("robot"));
+        .stdout(predicate::str::contains("urdf"));
 }
 
 #[test]
@@ -84,12 +84,12 @@ fn missing_workspace_package_fails_with_hint() {
     let home = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
     ruckus(home.path())
-        .args(["up", "robot", "--dry-run", "--workspace"])
+        .args(["up", "pubsub", "--dry-run", "--workspace"])
         .arg(ws.path())
         .assert()
         .failure()
         .stderr(predicate::str::contains("not built in"))
-        .stderr(predicate::str::contains("urdf_robot"))
+        .stderr(predicate::str::contains("py_pubsub"))
         .stderr(predicate::str::contains("hint:"));
 }
 
@@ -296,7 +296,7 @@ fn completes_subcommands_and_layouts() {
     .unwrap();
     assert_eq!(
         complete(home.path(), &["ruckus", "up", ""]),
-        ["mine", "pubsub", "robot", "turtle"]
+        ["mine", "pubsub", "turtle", "urdf"]
     );
     assert_eq!(complete(home.path(), &["ruckus", "show", "tu"]), ["turtle"]);
     assert_eq!(complete(home.path(), &["ruckus", "down", "p"]), ["pubsub"]);

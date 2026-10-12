@@ -170,7 +170,7 @@ mod tests {
     #[test]
     fn builtin_layouts_parse() {
         let config = Config::builtin();
-        for name in ["turtle", "pubsub", "robot"] {
+        for name in ["turtle", "pubsub", "urdf"] {
             assert!(config.layouts.contains_key(name), "missing {name}");
         }
         assert_eq!(config.layout("turtle").unwrap().focus(), 1);
@@ -192,7 +192,7 @@ mod tests {
         .unwrap();
         config.merge(user);
         assert_eq!(config.layout("turtle").unwrap().panes[0].run, "echo mine");
-        assert!(config.layouts.contains_key("robot"));
+        assert!(config.layouts.contains_key("urdf"));
         assert_eq!(
             config.defaults.ros_setup.as_deref(),
             Some("/opt/ros/jazzy/setup.bash")
@@ -225,7 +225,7 @@ mod tests {
     #[test]
     fn unknown_layout_lists_available() {
         let err = Config::builtin().layout("nope").unwrap_err().to_string();
-        assert!(err.contains("pubsub, robot, turtle"), "{err}");
+        assert!(err.contains("pubsub, turtle, urdf"), "{err}");
     }
 
     #[test]

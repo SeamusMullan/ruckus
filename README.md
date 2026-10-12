@@ -1,14 +1,25 @@
-# ruckus
+<p align="center">
+  <img src="docs/assets/logo.svg" width="120" alt="">
+</p>
 
-Start a whole ROS 2 setup with one command.
+<h1 align="center">ruckus</h1>
 
-ruckus opens a tmux session, splits it into panes, loads ROS 2 and your
-workspace in each one, and starts a command in each: nodes, teleop, topic
-echoes, RViz. Every pane stays a normal shell, so you can Ctrl+C a node and
-press Up, Enter to run it again.
+<p align="center">
+  ROS 2 on macOS and Linux in one command, and your whole setup in one more.
+</p>
+
+<p align="center">
+  <a href="https://github.com/SeamusMullan/ruckus/actions/workflows/ci.yml"><img src="https://github.com/SeamusMullan/ruckus/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache-2.0"></a>
+</p>
 
 ```console
-$ ruckus up turtle
+$ ruckus install jazzy
+ros-jazzy-desktop 0.11.0 with Python 3.12.15: 702 packages, 871 MB to download
+installed ROS 2 jazzy in ~/.local/share/ruckus/distros/jazzy
+created environment `jazzy`
+
+$ ruckus up turtle -e jazzy
 ```
 
 ```
@@ -19,232 +30,172 @@ $ ruckus up turtle
 └──────────────────────────┴──────────────────────────┘
 ```
 
-It can also install ROS 2 for you, ready-built, on macOS and Linux:
-
-```console
-$ ruckus install jazzy
-ros-jazzy-desktop 0.11.0 with Python 3.12.15: 702 packages, 871 MB to download (less if cached)
-installed ROS 2 jazzy in ~/.local/share/ruckus/distros/jazzy
-created environment `jazzy`
-$ ruckus up turtle -e jazzy
-```
-
-> **Status:** early. Layouts, environments and installs work today. Source
-> builds for distros with no ready-built packages are next; see the
-> [roadmap](#roadmap).
+- **Install ROS 2 in under a minute.** Humble, Jazzy, Kilted, Lyrical or
+  Rolling, ready-built for macOS (Apple Silicon and Intel) and Linux. No
+  source build, no Docker, no conda or pixi to set up first.
+- **Keep installs and workspaces apart.** Name a ROS install plus the
+  workspaces you overlay on it, then get a shell, run a command or start a
+  layout with it. ROS your `.zshrc` already loads is swapped out, never mixed in.
+- **Start a whole session at once.** A layout opens tmux, splits it into
+  panes, loads ROS in each and starts your nodes, teleop, echoes and RViz.
+  Every pane stays a normal shell.
 
 ## Install
 
-Needs tmux (`brew install tmux` or `apt install tmux`).
+```sh
+curl -fsSL https://raw.githubusercontent.com/SeamusMullan/ruckus/main/install.sh | sh
+```
+
+The script downloads the release binary for your system to `~/.local/bin` and
+checks its SHA256. Or, with Homebrew or Rust:
 
 ```sh
+brew install SeamusMullan/ruckus/ruckus
 cargo install --git https://github.com/SeamusMullan/ruckus
 ```
 
-That is the only way to install it for now. Tagged releases will carry
-ready-built archives for macOS and Linux (arm64 and x86_64), each with the
-binary, shell completions and a `SHA256SUMS` file to check them against. A
-Homebrew tap (`brew install SeamusMullan/ruckus/ruckus`) is planned to follow
-the first release.
+Layouts also need tmux: `brew install tmux` or `sudo apt install tmux`.
 
-### Shell completions
+## Quick start
 
 ```sh
-source <(ruckus completions zsh)                              # zsh: in ~/.zshrc, after compinit
-eval "$(ruckus completions bash)"                             # bash: in ~/.bashrc
-ruckus completions fish > ~/.config/fish/completions/ruckus.fish
+ruckus install jazzy           # desktop: RViz, turtlesim, demos, colcon and compilers
+ruckus shell jazzy             # your usual shell, with Jazzy loaded
+ruckus up turtle -e jazzy      # turtlesim, teleop and two echoes in tmux
 ```
-
-For zsh you can also save it once, in a directory on your `fpath`:
-`ruckus completions zsh > ~/.zfunc/_ruckus`, with
-`fpath=(~/.zfunc $fpath)` before `compinit`.
-
-Names complete from what you have: `ruckus up <Tab>` lists layouts,
-`ruckus shell <Tab>` and `-e <Tab>` list environments, and
-`ruckus uninstall <Tab>` lists installed distros. The script asks `ruckus`
-for them on each Tab, so `ruckus` must be on your `PATH`.
-
-## Use
-
-```sh
-ruckus ls                    # list layouts
-ruckus show robot            # what a layout runs
-ruckus up turtle             # start it (or attach if running)
-ruckus up robot -w ~/my_ws   # use a different workspace
-ruckus up turtle --dry-run   # print the tmux commands instead
-ruckus up turtle --restart   # stop and start again
-ruckus down turtle           # stop it
-```
-
-Inside the session: click a pane (or Ctrl+B, arrow) to move, Ctrl+B z to zoom
-a pane, Ctrl+B d to leave it running.
 
 ## Install ROS 2
 
 ```sh
-ruckus install jazzy                 # desktop: RViz, turtlesim, demos, plus colcon and compilers
-ruckus install kilted --variant base # no GUI tools
-ruckus install jazzy --add ros-jazzy-navigation2   # extra packages; they stay on later runs
-ruckus install jazzy --remove ros-jazzy-navigation2
-ruckus install jazzy --update        # move everything to the newest versions
-ruckus install jazzy --dry-run       # what it would install, and the download size
-ruckus distros                       # what is installed, and the lock files
+ruckus install lyrical                        # also ros2_lyrical
+ruckus install kilted --variant base          # no GUI tools
+ruckus install jazzy --add ros-jazzy-xacro    # add packages; they stay on later runs
+ruckus install jazzy --remove ros-jazzy-xacro
+ruckus install jazzy --update                 # move everything to the newest versions
+ruckus install jazzy --dry-run                # what it would install, and the download size
+ruckus distros                                # what is installed
 ruckus uninstall jazzy
 ```
 
-Running `install` again keeps what earlier runs added, and keeps installed
-packages at their versions unless `--update` is given, so adding one package
-does not upgrade the rest.
-
-Each install writes `ruckus.lock` next to it, listing the exact packages. It
-uses the pixi lock format. To get the same install on another machine of the
-same platform, such as a classmate's laptop or CI, copy the file there and run:
-
-```sh
-ruckus install jazzy --lock ruckus.lock   # exactly these packages, no resolving
-```
-
 Packages come from [RoboStack](https://robostack.github.io), which builds ROS
-for conda on macOS (Apple Silicon and Intel), Linux and Windows: Humble,
-Jazzy, Kilted, Lyrical and Rolling, from its channels on prefix.dev. ruckus
-resolves and installs them itself through
-[rattler](https://github.com/conda/rattler), the library behind pixi, so
-neither conda nor pixi is needed. Each distro is self-contained in
-`~/.local/share/ruckus/distros/<distro>`, with its own Python, and downloads
-are shared through the rattler cache (the same one pixi uses).
+for conda. ruckus resolves and installs them itself through
+[rattler](https://github.com/conda/rattler), the library behind pixi. Each
+distro is self-contained in `~/.local/share/ruckus/distros/<distro>`, with its
+own Python and its own colcon settings, and gets an environment of the same
+name.
 
-`install` also creates an environment named after the distro, so
-`ruckus shell jazzy` works straight away. To use an installed distro in another
-environment, pass its name: `ruckus env create lab --ros jazzy --ws ~/lab_ws`.
-
-`ros2_jazzy` works as a name too. Installing a distro RoboStack does not build
-for your platform says so; point an environment at your own source build
-instead.
-
-## Install a workspace's dependencies
+Running `install` again keeps the packages you added and the versions you
+have, unless you pass `--update`. Each install also writes a `ruckus.lock`
+(in pixi's lock format) with the exact packages. Copy it to another machine
+of the same platform, such as a classmate's laptop or CI, to get the identical
+install:
 
 ```sh
-ruckus deps -e jazzy                 # the workspace in the current directory
-ruckus deps ~/nav_ws --distro jazzy  # or name it, and the distro
-ruckus deps -e jazzy --dry-run       # what is installed and what is missing
+ruckus install jazzy --lock ruckus.lock
 ```
 
-`deps` does what `rosdep install` does, for a distro from `ruckus install`.
-It reads every `package.xml` in the workspace (skipping `COLCON_IGNORE`d
-ones), leaves out packages the workspace builds itself, and installs the rest
-into the distro. ROS packages become `ros-jazzy-<name>`; system dependencies
-such as `python3-numpy` or `eigen` use RoboStack's rosdep mapping, which ruckus
-carries a copy of. Anything RoboStack does not have is listed, not installed.
-It does not work with a ROS built from source yet; use rosdep there.
+### Workspace dependencies
+
+```sh
+ruckus deps -e jazzy                  # the workspace in the current directory
+ruckus deps ~/nav_ws --distro jazzy
+ruckus deps -e jazzy --dry-run        # what is installed and what is missing
+```
+
+`deps` does what `rosdep install` does, for a distro from `ruckus install`. It
+reads every `package.xml` in the workspace, leaves out the packages the
+workspace builds itself, and installs the rest, using RoboStack's mapping for
+system dependencies such as `python3-numpy`.
 
 ## Environments
 
-An environment is a ROS install plus the workspaces you overlay on it, saved
-under a name. Use one to get a shell, run a single command, or start a layout.
+An environment is a ROS install plus the workspaces you overlay on it.
 
 ```sh
-ruckus env create lab --ros ~/ros2_lyrical/install --ws ~/polar_ws --var ROS_DOMAIN_ID=7
-ruckus env ls                     # * marks the default
+ruckus env create lab --ros jazzy --ws ~/lab_ws --var ROS_DOMAIN_ID=7
+ruckus env create src --ros ~/ros2_lyrical/install   # a ROS you built yourself works too
+ruckus env ls
 ruckus env show lab               # checks the install and workspaces exist and are built
-ruckus shell lab                  # your usual shell, with ROS and ~/polar_ws loaded
+ruckus shell lab
 ruckus run -e lab -- ros2 topic list
-ruckus up robot -e lab            # a layout in that environment
 ruckus env rm lab                 # forgets it; never touches the install
 ```
 
-`--ros` takes an install directory (ruckus picks `setup.zsh` or
-`setup.bash` to match your shell) or a setup file. `--ws` can repeat; the
-workspaces are overlaid in order, and layouts without their own workspace run
-in the last one. `--pre` adds shell lines that run before ROS loads, such as a
-`PATH` change.
+`ruckus shell` runs your own `.zshrc` or `.bashrc` first, so your prompt and
+aliases stay. If they load a ROS, ruckus unloads it before loading the
+environment's. Set a default environment with `env = "lab"` under `[defaults]`
+in `~/.config/ruckus/config.toml` to leave out `-e`.
 
-Each environment is a small TOML file in `~/.config/ruckus/envs/` that you can
-edit by hand. Set a default with `env = "lab"` under `[defaults]` in
-`config.toml`; then `ruckus shell`, `ruckus run` and `ruckus up` use it
-without `-e`.
+## Layouts
 
-`ruckus shell` runs your normal rc files first (`.zshrc` or `.bashrc`), so your
-prompt and aliases stay, and sets `RUCKUS_ENV` to the environment's name.
-If your rc file already loads a ROS, ruckus unloads it before loading the
-environment's, so two distros never mix. Settings such as `ROS_DOMAIN_ID`
-stay. Distros from `ruckus install` also get their own colcon settings
-(`COLCON_HOME`), so `~/.colcon` tuned for another ROS does not leak in.
-ROS is always loaded by sourcing its setup files inside the shell. On macOS
-this matters: System Integrity Protection strips the `DYLD_*` variables ROS
-needs from any environment passed to `/bin/zsh` or `/bin/bash`.
+```sh
+ruckus ls                    # turtle, pubsub, urdf, and yours
+ruckus show urdf             # what a layout runs
+ruckus up turtle -e jazzy    # start it, or attach if it is running
+ruckus up pubsub -w ~/ws     # use a different workspace
+ruckus up turtle --dry-run   # print the tmux commands instead
+ruckus down turtle
+```
 
-## Configure
+In the session: click a pane (or Ctrl+B, arrow) to move, Ctrl+B z to zoom a
+pane, Ctrl+B d to leave it running.
 
-ruckus reads `~/.config/ruckus/config.toml` (or `$XDG_CONFIG_HOME/ruckus/`,
-or `--config`). Layouts there add to the built-in ones, and replace them when
-the name matches.
+Define your own in `~/.config/ruckus/config.toml`:
 
 ```toml
-[defaults]
-env = "lab"                               # environment used when none is named
-ros_setup = "/opt/ros/jazzy"              # or a ROS install, without an environment
-pre = []                                  # shell lines run before ROS loads
-
 [layouts.nav]
 description = "Nav2 with RViz"
-workspace = "~/nav_ws"                    # overlaid and cd'd into
-requires = ["my_robot_bringup"]           # must be built in <workspace>/install
-hint = "Run colcon build in ~/nav_ws first."
+workspace = "~/nav_ws"
+requires = ["my_robot_bringup"]     # checked before anything starts
 panes = [
   { run = "ros2 launch my_robot_bringup robot.launch.py" },
   { run = "ros2 launch nav2_bringup navigation_launch.py", delay = 5 },
   { run = "rviz2", delay = 5 },
-  { focus = true },                       # an empty pane is a ready shell
+  { focus = true },                 # an empty pane is a ready shell
 ]
 ```
 
-| Pane key | Meaning |
-|----------|---------|
-| `run`    | Command to start. Empty leaves a shell. |
-| `delay`  | Seconds to wait first, so earlier nodes are up. |
-| `focus`  | This pane gets the keyboard. |
+See [docs/configuration.md](docs/configuration.md) for every setting.
 
-A layout can also set `env`, `ros_setup` and `pre`. The command line beats the
-layout, the layout beats the environment, and the environment beats
-`[defaults]`. `pre` lines add up instead: defaults, then environment, then
-layout.
+## Shell completions
 
-Built-in layouts: `turtle` (turtlesim), `pubsub` (the Python talker/listener
-tutorial) and `robot` (a URDF package with RViz). See
-[`src/builtin.toml`](src/builtin.toml).
+```sh
+source <(ruckus completions zsh)      # in ~/.zshrc, after compinit
+eval "$(ruckus completions bash)"     # in ~/.bashrc
+ruckus completions fish > ~/.config/fish/completions/ruckus.fish
+```
 
-## Roadmap
+Layout, environment and distro names complete too.
 
-1. **`ruckus up`**: tmux layouts from config. *Done.*
-2. **`ruckus env`**: named environments, each a ROS install plus workspaces,
-   used by `up`, `shell` and `run`. *Done.*
-3. **`ruckus install <distro>`**: ready-built ROS 2 from RoboStack, installed
-   natively through the rattler library, no pixi or conda needed. *Done.*
-4. **Source builds**: an automated, repeatable source build for packages or
-   distros RoboStack does not build, against a conda-forge prefix that ruckus
-   sets up (so no Homebrew or system Python is involved).
+## How it works
+
+- **ROS is loaded inside the shell.** ruckus sources setup files in the shell
+  it starts, instead of passing variables in. On macOS this is required:
+  System Integrity Protection strips the `DYLD_*` variables ROS needs from
+  anything passed to `/bin/zsh` or `/bin/bash`.
+- **Installs are conda prefixes.** rattler resolves RoboStack's and
+  conda-forge's packages and links them into the prefix from a shared cache,
+  so a second distro or a reinstall downloads only what is new.
+- **Sessions are plain tmux.** ruckus runs `tmux` commands and gets out of the
+  way; `--dry-run` shows exactly which.
 
 ## Develop
 
 ```sh
 cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test
+RUCKUS_NETWORK_TESTS=1 cargo test     # also resolve real RoboStack packages
 ```
 
-The tmux tests run on a private server (`RUCKUS_TMUX_SOCKET`), so they never
-touch your own sessions. Tests that need the network (resolving real RoboStack
-packages) run when `RUCKUS_NETWORK_TESTS=1` is set.
+Tests never touch your own tmux sessions or config: tmux tests use a private
+server, and the rest a temporary home. CI also installs Jazzy and Lyrical for
+real on Linux and macOS, sends a message between two nodes and builds a
+package with colcon, weekly as well as on every push.
 
-CI runs format, lint, tests and a smoke test of the release build on Linux and
-macOS, plus a real `ruckus install jazzy` that passes a message between two
-nodes and builds a package with colcon. It also runs weekly, to notice when
-upstream packages change.
-
-Pushing a tag such as `v0.1.0` runs the release workflow: it builds the four
-archives on native runners, writes `SHA256SUMS`, fills in the Homebrew formula
-template in [`packaging/homebrew`](packaging/homebrew/ruckus.rb), and attaches
-them all to a GitHub release. Running the workflow by hand does the same but
-publishes nothing; the files are kept as a workflow artifact.
+Pushing a `v*` tag builds the release archives and the Homebrew formula and
+publishes them as a GitHub release. Planned work is in the
+[issues](https://github.com/SeamusMullan/ruckus/issues).
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE).
+Apache License 2.0. See [LICENSE](LICENSE). Includes RoboStack's rosdep
+mapping, under the MIT license (see [src/robostack/LICENSE](src/robostack/LICENSE)).
