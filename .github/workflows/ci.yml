@@ -19,7 +19,7 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -33,7 +33,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -50,7 +50,7 @@ jobs:
     env:
       TERM: xterm-256color
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install tmux and zsh
@@ -71,7 +71,7 @@ jobs:
       TERM: xterm-256color
       RUCKUS_TMUX_SOCKET: ruckus-smoke
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install tmux
@@ -104,7 +104,7 @@ jobs:
           $bin env show smoke
           test "$(SHELL=/bin/bash $bin run -e smoke -- printenv ROS_DISTRO)" = smoke
           $bin env rm smoke
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ruckus-${{ matrix.os }}
           path: target/release/ruckus
