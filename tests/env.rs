@@ -434,3 +434,198 @@ fn install_dry_run_resolves_from_robostack() {
             "RoboStack has no ready-built ROS 2 `lyrical`",
         ));
 }
+
+/// A distro laid out like `ruckus install` leaves it, with these conda packages "installed".
+fn fake_install(sb: &Sandbox, distro: &str, packages: &[&str]) {
+    let dir = sb.path(&format!(".local/share/ruckus/distros/{distro}"));
+    let meta = dir.join("prefix/conda-meta");
+    std::fs::create_dir_all(&meta).unwrap();
+    for name in packages {
+        std::fs::write(
+            meta.join(format!("{name}-1.0-0.json")),
+            format!("{{\"name\": \"{name}\", \"version\": \"1.0\"}}"),
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        dir.join("setup.bash"),
+        format!("export ROS_DISTRO={distro}\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("ruckus.toml"),
+        format!(
+            "distro = \"{distro}\"\nvariant = \"base\"\nspecs = [\"ros-{distro}-ros-base\"]\n\
+             channels = [\"robostack-{distro}\"]\nplatform = \"osx-arm64\"\npackages = 3\ninstalled = 0\n"
+        ),
+    )
+    .unwrap();
+}
+
+/// Write `<ws>/src/<name>/package.xml` with these dependency tags.
+fn fake_package(ws: &Path, name: &str, deps: &str) {
+    let dir = ws.join("src").join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("package.xml"),
+        format!("<?xml version=\"1.0\"?>\n<package format=\"3\">\n  <name>{name}</name>\n{deps}\n</package>\n"),
+    )
+    .unwrap();
+}
+
+#[test]
+fn deps_reports_what_a_workspace_needs() {
+    let sb = Sandbox::new();
+    fake_install(
+        &sb,
+        "jazzy",
+        &[
+            "ros-jazzy-rclcpp",
+            "ros-jazzy-ament-cmake",
+            "numpy",
+            "python",
+        ],
+    );
+    let ws = sb.path("app_ws");
+    fake_package(
+        &ws,
+        "app",
+        "<buildtool_depend>ament_cmake</buildtool_depend>\n<depend>rclcpp</depend>\n\
+         <depend>app_msgs</depend>\n<exec_depend>python3-numpy</exec_depend>\n\
+         <test_depend>python3-pytest</test_depend>\n<doc_depend>made_up_doc_tool</doc_depend>\n\
+         <exec_depend condition=\"$ROS_VERSION == 1\">roscpp</exec_depend>",
+    );
+    fake_package(&ws, "app_msgs", "<depend>rclcpp</depend>");
+    fake_package(&ws, "ignored", "<depend>made_up_pkg</depend>");
+    std::fs::write(ws.join("src/ignored/COLCON_IGNORE"), "").unwrap();
+    sb.ruckus("/bin/bash")
+        .args(["env", "create", "j", "--ros", "jazzy"])
+        .assert()
+        .success();
+
+    // Everything ROS is installed, so this needs no network.
+    sb.ruckus("/bin/bash")
+        .args(["deps", "-e", "j", "--dry-run"])
+        .arg(&ws)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2 packages in"))
+        .stdout(predicate::str::contains(
+            "installed (3): numpy, ros-jazzy-ament-cmake, ros-jazzy-rclcpp",
+        ))
+        .stdout(predicate::str::contains("to install (1): pytest"))
+        .stdout(predicate::str::contains("dry run; nothing installed"));
+
+    // From inside the workspace, with --distro or the default environment.
+    sb.ruckus("/bin/bash")
+        .current_dir(&ws)
+        .args(["deps", "--distro", "ros2_jazzy", "-n"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("to install (1): pytest"));
+    std::fs::write(
+        sb.path(".config/ruckus/config.toml"),
+        "[defaults]\nenv = \"j\"\n",
+    )
+    .unwrap();
+    sb.ruckus("/bin/bash")
+        .current_dir(ws.join("src"))
+        .args(["deps", "-n"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("to install (1): pytest"));
+
+    // Nothing missing: nothing to do, even without --dry-run.
+    fake_install(
+        &sb,
+        "jazzy",
+        &[
+            "ros-jazzy-rclcpp",
+            "ros-jazzy-ament-cmake",
+            "numpy",
+            "pytest",
+        ],
+    );
+    sb.ruckus("/bin/bash")
+        .arg("deps")
+        .arg(&ws)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("all dependencies are installed"));
+}
+
+#[test]
+fn deps_needs_a_ruckus_installed_distro() {
+    let sb = Sandbox::new();
+    sb.create("lab");
+    let ws = sb.path("app_ws");
+    fake_package(&ws, "app", "<depend>rclcpp</depend>");
+    sb.ruckus("/bin/bash")
+        .args(["deps", "-e", "lab", "-n"])
+        .arg(&ws)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "only works with distros installed by `ruckus install`",
+        ));
+    sb.ruckus("/bin/bash")
+        .args(["deps", "--distro", "jazzy", "-n"])
+        .arg(&ws)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("`jazzy` was not installed"));
+    sb.ruckus("/bin/bash")
+        .args(["deps", "-n"])
+        .arg(&ws)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("name a distro with --distro"));
+
+    fake_install(&sb, "jazzy", &[]);
+    sb.ruckus("/bin/bash")
+        .args(["deps", "--distro", "jazzy", "-n"])
+        .arg(sb.path("ws"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no package.xml found"));
+}
+
+/// Looks real ROS packages up in RoboStack's jazzy channel (no install).
+/// Needs the network, so it runs only when RUCKUS_NETWORK_TESTS is set.
+#[test]
+fn deps_dry_run_resolves_from_robostack() {
+    if std::env::var_os("RUCKUS_NETWORK_TESTS").is_none() {
+        eprintln!("skipping: set RUCKUS_NETWORK_TESTS=1 to run");
+        return;
+    }
+    let sb = Sandbox::new();
+    fake_install(&sb, "jazzy", &["ros-jazzy-rclcpp"]);
+    let ws = sb.path("nav_ws");
+    fake_package(
+        &ws,
+        "nav_app",
+        "<depend>rclcpp</depend>\n<depend>nav2_msgs</depend>\n<depend>tf2_ros</depend>\n\
+         <exec_depend>python3-numpy</exec_depend>\n<depend>made_up_pkg_xyz</depend>",
+    );
+    sb.ruckus("/bin/bash")
+        .args(["deps", "--distro", "jazzy", "--dry-run"])
+        .arg(&ws)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("installed (1): ros-jazzy-rclcpp"))
+        .stdout(predicate::str::contains(
+            "to install (3): numpy, ros-jazzy-nav2-msgs, ros-jazzy-tf2-ros",
+        ))
+        .stderr(predicate::str::contains(
+            "no RoboStack package found for: made_up_pkg_xyz (needed by nav_app)",
+        ));
+
+    let ws = sb.path("bogus_ws");
+    fake_package(&ws, "bogus", "<depend>made_up_pkg_xyz</depend>");
+    sb.ruckus("/bin/bash")
+        .args(["deps", "--distro", "jazzy", "--dry-run"])
+        .arg(&ws)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("none of the dependencies"));
+}

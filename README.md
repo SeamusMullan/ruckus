@@ -83,6 +83,22 @@ environment, pass its name: `ruckus env create lab --ros jazzy --ws ~/lab_ws`.
 for your platform (such as Lyrical on macOS) says so; point an environment at
 your own source build instead.
 
+## Install a workspace's dependencies
+
+```sh
+ruckus deps -e jazzy                 # the workspace in the current directory
+ruckus deps ~/nav_ws --distro jazzy  # or name it, and the distro
+ruckus deps -e jazzy --dry-run       # what is installed and what is missing
+```
+
+`deps` does what `rosdep install` does, for a distro from `ruckus install`.
+It reads every `package.xml` in the workspace (skipping `COLCON_IGNORE`d
+ones), leaves out packages the workspace builds itself, and installs the rest
+into the distro. ROS packages become `ros-jazzy-<name>`; system dependencies
+such as `python3-numpy` or `eigen` use RoboStack's rosdep mapping, which ruckus
+carries a copy of. Anything RoboStack does not have is listed, not installed.
+It does not work with a ROS built from source yet; use rosdep there.
+
 ## Environments
 
 An environment is a ROS install plus the workspaces you overlay on it, saved
