@@ -16,7 +16,7 @@ case "$(uname -s)-$(uname -m)" in
 esac
 
 work=$(mktemp -d)
-trap 'kill "$server" 2>/dev/null; wait "$server" 2>/dev/null; rm -rf "$work"' EXIT
+trap 'kill "$server" 2>/dev/null || true; wait "$server" 2>/dev/null || true; rm -rf "$work"' EXIT
 
 # A release laid out like the release workflow's.
 release=$work/releases/download/v$version
