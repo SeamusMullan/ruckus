@@ -48,13 +48,17 @@ server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
 print(server.server_address[1], flush=True)
 server.serve_forever()
 PY
-python3 "$work/serve.py" "$work" "$version" > "$work/port" &
+python3 -u "$work/serve.py" "$work" "$version" > "$work/port" 2> "$work/server.err" &
 server=$!
 # Python can take a while to start on a cold CI runner.
 tries=0
 until [ -s "$work/port" ]; do
     tries=$((tries + 1))
-    [ "$tries" -le 60 ] || { echo "the test server did not start" >&2; exit 1; }
+    if [ "$tries" -gt 60 ]; then
+        echo "the test server did not start ($(command -v python3), $(python3 --version 2>&1)):" >&2
+        cat "$work/server.err" >&2
+        exit 1
+    fi
     sleep 0.5
 done
 base=http://127.0.0.1:$(cat "$work/port")/releases

@@ -56,6 +56,9 @@ impl Variant {
     }
 }
 
+/// How many times to try downloading and linking before giving up.
+const INSTALL_ATTEMPTS: u32 = 3;
+
 /// Tools for building workspaces with `colcon build`.
 const DEV_TOOLS: &[&str] = &[
     "colcon-common-extensions",
@@ -303,14 +306,32 @@ async fn install_async(request: &Request) -> Result<PathBuf> {
 
     fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
     let packages = records.len();
-    Installer::new()
-        .with_package_cache(package_cache)
-        .with_target_platform(platform)
-        .with_installed_packages(installed)
-        .with_reporter(IndicatifReporter::builder().clear_when_done(true).finish())
-        .install(&prefix, records.clone())
-        .await
-        .context("install failed; run the same command again to resume")?;
+    // Downloads can fail part way (a dropped connection, a CDN hiccup). Packages
+    // that finished are in the cache and the prefix, so another attempt only
+    // fetches the rest.
+    let mut installed = installed;
+    for attempt in 1..=INSTALL_ATTEMPTS {
+        let result = Installer::new()
+            .with_package_cache(package_cache.clone())
+            .with_target_platform(platform)
+            .with_installed_packages(installed)
+            .with_reporter(IndicatifReporter::builder().clear_when_done(true).finish())
+            .install(&prefix, records.clone())
+            .await;
+        match result {
+            Ok(_) => break,
+            Err(err) if attempt < INSTALL_ATTEMPTS => {
+                eprintln!("ruckus: install attempt {attempt} failed ({err}); trying again");
+                tokio::time::sleep(Duration::from_secs(2 * attempt as u64)).await;
+                installed = PrefixRecord::collect_from_prefix(&prefix)
+                    .with_context(|| format!("cannot read the packages in {}", prefix.display()))?;
+            }
+            Err(err) => {
+                return Err(anyhow::Error::new(err)
+                    .context("install failed; run the same command again to resume"));
+            }
+        }
+    }
 
     write_activation(&prefix, &dir)?;
     let channel_urls = channel_names
